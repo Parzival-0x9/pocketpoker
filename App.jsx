@@ -9,7 +9,25 @@ const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
 function useCountdownToFriday(){
   const [now,setNow]=useState(Date.now());
-  useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
+  useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return (
+        <div className="pp-topbar">
+          <button className="pp-hamburger" onClick={()=>setPpDrawerOpen(true)}>☰</button>
+          <div className="pp-brand"><strong>PocketPoker</strong><span className="badge" style={{marginLeft:6}}>v7.5</span></div>
+        </div>
+        <div className={"pp-drawer-backdrop" + (ppDrawerOpen ? " pp-open" : "")} onClick={()=>setPpDrawerOpen(false)} />
+        <aside className={"pp-drawer" + (ppDrawerOpen ? " pp-open" : "")}>
+          <strong>Navigate</strong>
+          <div className="pp-nav">
+            <a href="#game" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>Game</a>
+            <a href="#history" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>History</a>
+            <a href="#ledgers" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>Ledgers</a>
+            <a href="#profiles" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>Profiles</a>
+          </div>
+        </aside>
+        <div className="pp-spacer" />
+        {/* Anchor targets for smooth scroll without changing your layout */}
+        <div id="game" style={{position:'relative', top:'-60px'}}></div>
+        )=>clearInterval(i); },[]);
   const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
   const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
   const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
@@ -17,6 +35,8 @@ function useCountdownToFriday(){
 }
 
 export default function App(){
+  const [ppDrawerOpen, setPpDrawerOpen] = React.useState(false);
+
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
   const [applyPerHead,setApplyPerHead]=useState(false);
