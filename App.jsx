@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
@@ -31,17 +30,6 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
-
-  // NEW: Tabbed navigation + drawer state
-  const [tab, setTab] = useState(()=> localStorage.getItem('pp_tab') || 'game');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const tabs = [
-    { id:'game', label:'Game' },
-    { id:'history', label:'History' },
-    { id:'ledgers', label:'Ledgers' },
-    { id:'profiles', label:'Profiles' },
-  ];
-  useEffect(()=>{ localStorage.setItem('pp_tab', tab); }, [tab]);
 
   useEffect(()=>{ const s=load();
     if(s){ setPlayers(s.players?.length?s.players:[blank(),blank()]);
@@ -278,31 +266,58 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // --- UI blocks as functions for cleanliness ---
-  const GameSection = () => (
-    <div className="surface" style={{marginTop:16}}>
-      <div className="controls">
-        <div className="stack">
-          <button className="btn primary" onClick={startGame}>Start New Game</button>
-          <button className="btn secondary" onClick={addPlayer}>Add Player</button>
-          <button className="btn danger" onClick={resetGame}>Reset Players</button>
-          <span className="pill">🎯 Enter cash-outs at the end.</span>
+  return (
+    <div className="container">
+      <div className="header">
+        <div className="title-badge">
+          <h1>PocketPoker</h1>
+          <span className="badge">Local</span>
         </div>
-        <div className="toggles toolbar">
-          <label className="inline">Buy-in (A$)
-            <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
-          </label>
-          <label className="inline">
-            <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
-          </label>
-          <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-          <span className="meta">from each other player</span>
+        <div className="toolbar">
+          <div className="switch">
+            <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
+            <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
+          </div>
+          <div className="switch">
+            <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
+            <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
+          </div>
         </div>
       </div>
+      <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
 
-      <hr className="hair" />
+      {alerts.length>0 && (
+        <div className="surface" style={{marginTop:14}}>
+          {alerts.map(a=> (
+            <div key={a.id} className="alert" style={{marginBottom:8}}>
+              Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
+            </div>
+          ))}
+        </div>
+      )}
 
-      <div className="table-wrapper">
+      <div className="surface" style={{marginTop:16}}>
+        <div className="controls">
+          <div className="stack">
+            <button className="btn primary" onClick={startGame}>Start New Game</button>
+            <button className="btn secondary" onClick={addPlayer}>Add Player</button>
+            <button className="btn danger" onClick={resetGame}>Reset Players</button>
+            <span className="pill">🎯 Enter cash-outs at the end.</span>
+          </div>
+          <div className="toggles toolbar">
+            <label className="inline">Buy-in (A$)
+              <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
+            </label>
+            <label className="inline">
+              <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
+            </label>
+            <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
+            <span className="meta">from each other player</span>
+          </div>
+        </div>
+
+        <hr className="hair" />
+
         <table className="table">
           <thead>
             <tr>
@@ -326,41 +341,36 @@ export default function App(){
             </tr>
           </tfoot>
         </table>
+
+        {Math.abs(totals.diff) > 0.01 ? (
+          <div className="header" style={{marginTop:12}}>
+            <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
+            <div className="toolbar">
+              <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
+              <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save Anyway</label>
+            </div>
+          </div>
+        ) : (
+          <div className="header" style={{marginTop:12}}>
+            <div className="ribbon">✅ Balanced: totals match.</div>
+            <div className="toolbar"></div>
+          </div>
+        )}
+
+        <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
+          <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
+        </div>
       </div>
 
-      {Math.abs(totals.diff) > 0.01 ? (
-        <div className="header" style={{marginTop:12}}>
-          <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
+      <div className="surface">
+        <div className="header" style={{marginBottom:0}}>
+          <h3 style={{margin:0}}>Game Overview (History)</h3>
           <div className="toolbar">
-            <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
-            <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save Anyway</label>
+            <button className="btn secondary" onClick={exportSeason}>Export CSVs</button>
+            <button className="btn danger" onClick={clearHistory}>Delete All History</button>
           </div>
         </div>
-      ) : (
-        <div className="header" style={{marginTop:12}}>
-          <div className="ribbon">✅ Balanced: totals match.</div>
-          <div className="toolbar"></div>
-        </div>
-      )}
-
-      <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
-        <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
-      </div>
-    </div>
-  );
-
-  const HistorySection = () => (
-    <div className="surface">
-      <div className="header" style={{marginBottom:0}}>
-        <h3 style={{margin:0}}>Game Overview (History)</h3>
-        <div className="toolbar">
-          <button className="btn secondary" onClick={exportSeason}>Export CSVs</button>
-          <button className="btn danger" onClick={clearHistory}>Delete All History</button>
-        </div>
-      </div>
-      <div className="meta">Click details to see full results, winner per-head payments, and settlement transfers.</div>
-
-      <div className="table-wrapper">
+        <div className="meta">Click details to see full results, winner per-head payments, and settlement transfers.</div>
         <table className="table">
           <thead>
             <tr>
@@ -405,78 +415,72 @@ export default function App(){
                       <td colSpan="6">
                         <div className="detail">
                           <strong>Per-player results</strong>
-                          <div className="table-wrapper">
-                            <table className="table">
-                              <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
-                              <tbody>
-                                {playersSorted.map(p=>(
-                                  <tr key={p.name}>
-                                    <td>{p.name}{p.name===winner?.name && <span className="chip" />}</td>
-                                    <td className="center mono">{aud(p.buyInTotal)}</td>
-                                    <td className="center mono">{aud(p.cashOut)}</td>
-                                    <td className="center mono">{aud(p.prize)}</td>
-                                    <td className="center mono">{p.net>=0?'+':''}{aud(p.net)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
+                          <table className="table">
+                            <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
+                            <tbody>
+                              {playersSorted.map(p=>(
+                                <tr key={p.name}>
+                                  <td>{p.name}{p.name===winner?.name && <span className="chip" />}</td>
+                                  <td className="center mono">{aud(p.buyInTotal)}</td>
+                                  <td className="center mono">{aud(p.cashOut)}</td>
+                                  <td className="center mono">{aud(p.prize)}</td>
+                                  <td className="center mono">{p.net>=0?'+':''}{aud(p.net)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
 
                           {g.perHead && (
                             <div>
                               <div style={{height:8}} />
                               <strong>Winner's A${g.perHead.amount} per-head payments</strong> <span className="meta">Winner: {g.perHead.winner} • Due: {new Date(g.perHead.due).toLocaleString()}</span>
-                              <div className="table-wrapper">
-                                <table className="table">
-                                  <thead><tr><th>Payer</th><th className="center">Method</th><th className="center">Status</th><th className="center">Paid at</th><th className="center">PayID</th></tr></thead>
-                                  <tbody>
-                                    {g.perHead.payers.map(name=>{
-                                      const rec = g.perHead.payments?.[name] || {paid:false,method:null,paidAt:null};
-                                      const overdue = !rec.paid && (Date.now() > new Date(g.perHead.due).getTime());
-                                      return (
-                                        <tr key={name}>
-                                          <td>{name}</td>
-                                          <td className="center">
-                                            <select value={rec.method||""} onChange={e=>setPerHeadMethod(g.id,name,e.target.value||null)}>
-                                              <option value="">—</option>
-                                              <option value="cash">Cash</option>
-                                              <option value="payid">PayID</option>
-                                            </select>
-                                          </td>
-                                          <td className="center">
-                                            {rec.paid ? <span className="pill">Paid</span> :
-                                              <button className="btn success" onClick={()=>markPerHeadPaid(g.id,name,rec.method||'cash')}>Mark paid</button>}
-                                            {overdue && <div className="meta">⚠️ overdue</div>}
-                                          </td>
-                                          <td className="center mono">{rec.paidAt ? new Date(rec.paidAt).toLocaleString() : '—'}</td>
-                                          <td className="center">
-                                            {profiles[name]?.payid ? (
-                                              <button className="btn secondary" onClick={()=>copyPayID(name)}>Copy</button>
-                                            ) : <span className="meta">—</span>}
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
+                              <table className="table">
+                                <thead><tr><th>Payer</th><th className="center">Method</th><th className="center">Status</th><th className="center">Paid at</th><th className="center">PayID</th></tr></thead>
+                                <tbody>
+                                  {g.perHead.payers.map(name=>{
+                                    const rec = g.perHead.payments?.[name] || {paid:false,method:null,paidAt:null};
+                                    const overdue = !rec.paid && (Date.now() > new Date(g.perHead.due).getTime());
+                                    return (
+                                      <tr key={name}>
+                                        <td>{name}</td>
+                                        <td className="center">
+                                          <select value={rec.method||""} onChange={e=>setPerHeadMethod(g.id,name,e.target.value||null)}>
+                                            <option value="">—</option>
+                                            <option value="cash">Cash</option>
+                                            <option value="payid">PayID</option>
+                                          </select>
+                                        </td>
+                                        <td className="center">
+                                          {rec.paid ? <span className="pill">Paid</span> :
+                                            <button className="btn success" onClick={()=>markPerHeadPaid(g.id,name,rec.method||'cash')}>Mark paid</button>}
+                                          {overdue && <div className="meta">⚠️ overdue</div>}
+                                        </td>
+                                        <td className="center mono">{rec.paidAt ? new Date(rec.paidAt).toLocaleString() : '—'}</td>
+                                        <td className="center">
+                                          {profiles[name]?.payid ? (
+                                            <button className="btn secondary" onClick={()=>copyPayID(name)}>Copy</button>
+                                          ) : <span className="meta">—</span>}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
                             </div>
                           )}
 
                           <div style={{height:8}} />
                           <strong>Transfers for settlement</strong>
-                          <div className="table-wrapper">
-                            <table className="table">
-                              <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
-                              <tbody>
-                                {(g.txns||[]).length===0 ? (
-                                  <tr><td colSpan="3" className="center meta">No transfers needed.</td></tr>
-                                ) : (g.txns||[]).map((t,i)=>(
-                                  <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
+                          <table className="table">
+                            <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
+                            <tbody>
+                              {(g.txns||[]).length===0 ? (
+                                <tr><td colSpan="3" className="center meta">No transfers needed.</td></tr>
+                              ) : (g.txns||[]).map((t,i)=>(
+                                <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       </td>
                     </tr>
@@ -487,14 +491,10 @@ export default function App(){
           </tbody>
         </table>
       </div>
-    </div>
-  );
 
-  const LedgersSection = () => (
-    <div className="surface">
-      <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
-      <div className="meta">Clean + collapsible. Click Show to reveal who they owe / who owes them.</div>
-      <div className="table-wrapper">
+      <div className="surface">
+        <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
+        <div className="meta">Clean + collapsible. Click Show to reveal who they owe / who owes them.</div>
         <table className="table">
           <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Actions</th></tr></thead>
           <tbody>
@@ -517,31 +517,29 @@ export default function App(){
                     <tr>
                       <td colSpan="3">
                         <div className="detail">
-                          <div className="table-wrapper">
-                            <table className="table">
-                              <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
-                              <tbody>
-                                <tr>
-                                  <td>
-                                    {(info.owes||[]).length===0 ? <span className="meta">—</span> :
-                                      info.owes.map((x,i)=>(<div key={i}>{x.to}</div>))}
-                                  </td>
-                                  <td className="center mono">
-                                    {(info.owes||[]).length===0 ? <span className="meta">—</span> :
-                                      info.owes.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                                  </td>
-                                  <td>
-                                    {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
-                                      info.owedBy.map((x,i)=>(<div key={i}>{x.from}</div>))}
-                                  </td>
-                                  <td className="center mono">
-                                    {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
-                                      info.owedBy.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                                  </td>
-                                </tr>
-                              </tbody>
-                            </table>
-                          </div>
+                          <table className="table">
+                            <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
+                            <tbody>
+                              <tr>
+                                <td>
+                                  {(info.owes||[]).length===0 ? <span className="meta">—</span> :
+                                    info.owes.map((x,i)=>(<div key={i}>{x.to}</div>))}
+                                </td>
+                                <td className="center mono">
+                                  {(info.owes||[]).length===0 ? <span className="meta">—</span> :
+                                    info.owes.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
+                                </td>
+                                <td>
+                                  {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
+                                    info.owedBy.map((x,i)=>(<div key={i}>{x.from}</div>))}
+                                </td>
+                                <td className="center mono">
+                                  {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
+                                    info.owedBy.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
                       </td>
                     </tr>
@@ -552,14 +550,10 @@ export default function App(){
           </tbody>
         </table>
       </div>
-    </div>
-  );
 
-  const ProfilesSection = () => (
-    <div className="surface">
-      <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
-      <div className="meta">Add optional PayIDs so it’s one tap to copy during payouts.</div>
-      <div className="table-wrapper">
+      <div className="surface">
+        <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
+        <div className="meta">Add optional PayIDs so it’s one tap to copy during payouts.</div>
         <table className="table">
           <thead><tr><th>Name</th><th>PayID</th><th className="center">Copy</th></tr></thead>
           <tbody>
@@ -578,68 +572,8 @@ export default function App(){
           </tbody>
         </table>
       </div>
-    </div>
-  );
 
-  return (
-    <div>
-      {/* Fixed top bar with hamburger & theme toggles */}
-      <div className="topbar">
-        <button className="hamburger" onClick={()=>setDrawerOpen(true)}>☰</button>
-        <div className="brand">
-          <h1>PocketPoker</h1>
-          <span className="badge">Local</span>
-        </div>
-        <div className="top-tabs">
-          {tabs.map(t=>(
-            <button key={t.id} className={"tabbtn"+(tab===t.id?" active":"")} onClick={()=>setTab(t.id)}>{t.label}</button>
-          ))}
-        </div>
-        <div className="toolbar" style={{marginLeft:'auto'}}>
-          <div className="switch">
-            <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙</button>
-            <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️</button>
-          </div>
-          <div className="switch">
-            <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚</button>
-            <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌</button>
-          </div>
-        </div>
-      </div>
-      <div className={"drawer-backdrop"+(drawerOpen?" open":"")} onClick={()=>setDrawerOpen(false)} />
-      <div className={"drawer"+(drawerOpen?" open":"")}>
-        <div className="title-badge" style={{marginBottom:12}}>
-          <strong>Navigate</strong>
-        </div>
-        <div className="navgroup">
-          {tabs.map(t=>(
-            <button key={t.id} className={"tabbtn"+(tab===t.id?" active":"")} onClick={()=>{setTab(t.id); setDrawerOpen(false);}}>{t.label}</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="spacer" />
-
-      <div className="container">
-        <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
-
-        {alerts.length>0 && (
-          <div className="surface" style={{marginTop:14}}>
-            {alerts.map(a=> (
-              <div key={a.id} className="alert" style={{marginBottom:8}}>
-                Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
-              </div>
-            ))}
-          </div>
-        )}
-
-        {tab==='game' && <GameSection />}
-        {tab==='history' && <HistorySection />}
-        {tab==='ledgers' && <LedgersSection />}
-        {tab==='profiles' && <ProfilesSection />}
-
-        <div className="footer meta">Tip: Use ☰ to switch sections on mobile. Tables scroll sideways if needed—no more panning the whole page.</div>
-      </div>
+      <div className="footer meta">Tip: “Start New Game” keeps players, zeroes amounts. Per-head payments are tracked under each game's details.</div>
     </div>
   );
 }
