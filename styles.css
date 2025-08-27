@@ -98,11 +98,3 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 #confetti-root{position:fixed;inset:0;pointer-events:none;overflow:hidden}
 .confetti{position:fixed;top:-10px;width:6px;height:10px;opacity:0.95;animation:confettiFall 1200ms ease-out forwards}
 @keyframes confettiFall {0%{transform:translateY(-10px) rotate(0)} 100%{transform:translateY(110vh) rotate(720deg); opacity:0}}
-
-/* --- UX tweaks: bigger hamburger; phone compact helpers --- */
-.hamburger{width:46px;height:46px;padding:12px;font-size:22px;border-radius:14px;display:flex;align-items:center;justify-content:center}
-@media (max-width:900px){
-  .player-card .totals-bar{display:flex;gap:12px;justify-content:space-between;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;background:rgba(255,255,255,.03);margin-top:8px}
-  .player-card .totals-bar .item{flex:1;text-align:center}
-  .player-card .totals-bar .item .value{font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas;font-weight:800}
-}
