@@ -32,7 +32,6 @@ export default function App(){
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
 
-  // NEW: Tabbed navigation + drawer state
   const [tab, setTab] = useState(()=> localStorage.getItem('pp_tab') || 'game');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const tabs = [
@@ -64,7 +63,7 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
-  const {due,days,hrs,mins,secs} = useCountdownToFriday();
+  const {days,hrs,mins,secs} = useCountdownToFriday();
 
   const totals=useMemo(()=>{
     const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
@@ -139,7 +138,6 @@ export default function App(){
     }
   }
 
-  // CSV export
   function downloadCSV(filename, rows){
     const csv = toCSV(rows);
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
@@ -167,7 +165,6 @@ export default function App(){
     downloadCSV("perhead.csv", r3);
   }
 
-  // confetti
   function burstConfetti(){
     let root = document.getElementById('confetti-root');
     if(!root){ root = document.createElement('div'); root.id='confetti-root'; document.body.appendChild(root); }
@@ -200,7 +197,6 @@ export default function App(){
     });
   }, [history]);
 
-  // per-head status/method + PayID
   function markPerHeadPaid(gameId, name, method){
     setHistory(h=> h.map(g=>{
       if(g.id!==gameId) return g;
@@ -230,7 +226,6 @@ export default function App(){
     }
   }
 
-  // Alerts: unpaid per-head past due
   const alerts = useMemo(()=>{
     const items=[]; const now = Date.now();
     history.forEach(g=>{
@@ -244,7 +239,6 @@ export default function App(){
     return items;
   }, [history]);
 
-  // Ledgers
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
@@ -270,7 +264,6 @@ export default function App(){
     return out;
   }, [history]);
 
-  // Suggested names
   const knownNames = useMemo(()=>{
     const set = new Set();
     players.forEach(p=> p.name && set.add(p.name));
@@ -278,9 +271,8 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // --- UI blocks as functions for cleanliness ---
   const GameSection = () => (
-    <div className="surface" style={{marginTop:16}}>
+    <div className="surface" style={{marginTop:12}}>
       <div className="controls">
         <div className="stack">
           <button className="btn primary" onClick={startGame}>Start New Game</button>
@@ -329,7 +321,7 @@ export default function App(){
       </div>
 
       {Math.abs(totals.diff) > 0.01 ? (
-        <div className="header" style={{marginTop:12}}>
+        <div className="header" style={{marginTop:10}}>
           <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
           <div className="toolbar">
             <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
@@ -337,13 +329,13 @@ export default function App(){
           </div>
         </div>
       ) : (
-        <div className="header" style={{marginTop:12}}>
+        <div className="header" style={{marginTop:10}}>
           <div className="ribbon">✅ Balanced: totals match.</div>
           <div className="toolbar"></div>
         </div>
       )}
 
-      <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
+      <div className="toolbar" style={{justifyContent:'flex-end', marginTop:10}}>
         <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
       </div>
     </div>
@@ -359,7 +351,6 @@ export default function App(){
         </div>
       </div>
       <div className="meta">Click details to see full results, winner per-head payments, and settlement transfers.</div>
-
       <div className="table-wrapper">
         <table className="table">
           <thead>
@@ -583,7 +574,6 @@ export default function App(){
 
   return (
     <div>
-      {/* Fixed top bar with hamburger & theme toggles */}
       <div className="topbar">
         <button className="hamburger" onClick={()=>setDrawerOpen(true)}>☰</button>
         <div className="brand">
@@ -608,13 +598,26 @@ export default function App(){
       </div>
       <div className={"drawer-backdrop"+(drawerOpen?" open":"")} onClick={()=>setDrawerOpen(false)} />
       <div className={"drawer"+(drawerOpen?" open":"")}>
-        <div className="title-badge" style={{marginBottom:12}}>
+        <div className="title-badge" style={{marginBottom:10}}>
           <strong>Navigate</strong>
         </div>
         <div className="navgroup">
           {tabs.map(t=>(
             <button key={t.id} className={"tabbtn"+(tab===t.id?" active":"")} onClick={()=>{setTab(t.id); setDrawerOpen(false);}}>{t.label}</button>
           ))}
+        </div>
+        <div style={{height:10}} />
+        <div className="title-badge"><strong>Appearance</strong></div>
+        <div style={{height:6}} />
+        <div className="navgroup">
+          <div className="switch">
+            <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
+            <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
+          </div>
+          <div className="switch">
+            <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
+            <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
+          </div>
         </div>
       </div>
 
@@ -624,7 +627,7 @@ export default function App(){
         <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
 
         {alerts.length>0 && (
-          <div className="surface" style={{marginTop:14}}>
+          <div className="surface" style={{marginTop:12}}>
             {alerts.map(a=> (
               <div key={a.id} className="alert" style={{marginBottom:8}}>
                 Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
@@ -638,7 +641,7 @@ export default function App(){
         {tab==='ledgers' && <LedgersSection />}
         {tab==='profiles' && <ProfilesSection />}
 
-        <div className="footer meta">Tip: Use ☰ to switch sections on mobile. Tables scroll sideways if needed—no more panning the whole page.</div>
+        <div className="footer meta">Tip: Use ☰ to switch sections on mobile. Tables scroll sideways inside their cards.</div>
       </div>
     </div>
   );
