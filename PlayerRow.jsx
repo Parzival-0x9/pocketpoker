@@ -1,7 +1,5 @@
 
 import React from "react";
-
-// Desktop table row only; mobile uses card layout defined in App.jsx
 export default function PlayerRow({ p, onChange, buyInAmount }){
   const update = (patch) => onChange({ ...p, ...patch });
   const remove = () => onChange({ ...p, _remove: true });

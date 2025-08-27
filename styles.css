@@ -1,57 +1,87 @@
 
-/* --- tweaks only; merge-safe --- */
-.hamburger {
-  appearance:none;
-  background:transparent;
-  border:1px solid var(--border);
-  border-radius:14px;
-  padding:12px;              /* bigger touch target */
-  font-size:22px;            /* bigger icon */
-  line-height:1;
-  width:46px; height:46px;   /* explicit size for easier tap */
-  display:flex; align-items:center; justify-content:center;
+:root {
+  --bg: #071019; --bg-2: #0a141f; --card: rgba(13,19,30,.95); --border: rgba(255,255,255,.085);
+  --text: #F4F7FF; --muted: #a7b4c7;
+  --gold-1: #ffd27a; --gold-2: #f5c84b;
+  --emerald-2: #1dbf73; --slate-2: #8994a9; --crimson-2: #e4574f;
+  --shadow: 0 14px 34px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+}
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{
+  margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Arial;
   color:var(--text);
+  background: linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);
+  padding-top: env(safe-area-inset-top);
 }
-@media (min-width:900px){
-  .hamburger { display:none; }
-}
+.container{max-width:1120px;margin:0 auto;padding:64px 18px 80px}
+@media (max-width:900px){ .container{padding:56px 12px 72px} }
 
-/* Net label under each card row on phones */
-.player-card .net-label {
-  display:block;
-  font-size:12px;
-  color:var(--muted);
-  text-align:center;
-  margin-top:2px;
-}
+/* Surfaces, text */
+.surface{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;box-shadow:var(--shadow);backdrop-filter:blur(6px)}
+.header{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap}
+.badge{padding:2px 8px;border:1px solid var(--border);background:rgba(255,255,255,.06);border-radius:999px;font-size:11px;color:var(--muted)}
+.meta{color:var(--muted);font-size:12px}
+hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:12px 0}
+.mono{font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas}
 
-/* Totals bar on phone */
-.player-card .totals-bar {
-  display:flex;
-  justify-content:space-between;
-  gap:12px;
-  padding:10px 12px;
-  border:1px dashed var(--border);
-  border-radius:12px;
-  margin-top:8px;
-  background:rgba(255,255,255,.03);
+/* Buttons */
+.btn{
+  appearance:none;border:1px solid var(--border);cursor:pointer;
+  color:var(--text);padding:9px 12px;border-radius:12px;font-weight:800;letter-spacing:.02em;
+  background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
+  box-shadow: 0 6px 12px rgba(0,0,0,.22);
 }
-.player-card .totals-bar .item {
-  flex:1;
-  text-align:center;
-}
-.player-card .totals-bar .item .label {
-  display:block;
-  font-size:11px;
-  color:var(--muted);
-  margin-bottom:2px;
-}
-.player-card .totals-bar .item .value {
-  font-family:'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
-  font-weight:800;
-}
+.btn.primary{background:linear-gradient(180deg,var(--gold-1),var(--gold-2)); color:#2a1800}
+.btn.secondary{background:linear-gradient(180deg,#3a4156,#30384b)}
+.btn.success{background:linear-gradient(180deg,#5ee6aa,var(--emerald-2)); color:#001e12}
+.btn.danger{background:linear-gradient(180deg,#ffb3ac,var(--crimson-2)); color:#2a0000}
+@media (max-width:900px){ .btn{padding:8px 10px; font-size:13px; border-radius:10px} }
 
-/* Smaller Remove button on phone so it doesn't dominate */
-@media (max-width:900px){
-  .player-card .btn.danger{ padding:8px 10px; }
+/* Inputs */
+label.inline{display:inline-flex;align-items:center;gap:8px}
+input[type="text"],input[type="number"]{background:rgba(255,255,255,.04);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;min-width:0}
+input[type="number"].small{width:84px;text-align:center}
+input[type="text"].name{width:200px}
+@media (max-width:900px){ input[type="number"].small{width:72px} input[type="text"].name{width:100%} }
+input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
+
+/* Tables (desktop) */
+.table-wrapper{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.table{width:100%;border-collapse:collapse;min-width:680px}
+.table th,.table td{padding:9px;border-bottom:1px dashed var(--border)}
+.table th{text-align:left;color:var(--muted);font-weight:800;letter-spacing:.04em;text-transform:uppercase;font-size:12px}
+.center{text-align:center}
+
+/* Topbar + hamburger */
+.topbar {
+  position:fixed; top:0; left:0; right:0;
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:10px 12px; background:var(--card); border-bottom:1px solid var(--border); box-shadow:var(--shadow); z-index:20;
 }
+.hamburger {
+  appearance:none; background:transparent; border:1px solid var(--border);
+  border-radius:14px; padding:12px; font-size:22px; line-height:1;
+  width:46px; height:46px; display:flex; align-items:center; justify-content:center; color:var(--text);
+}
+.brand { display:flex; align-items:center; gap:8px }
+.brand h1 { font-size:20px; margin:0 }
+.spacer { height:56px }
+@media (min-width:900px){ .spacer{height:72px} .brand h1{font-size:28px} }
+
+/* Desktop vs phone render */
+.player-card{display:none}
+@media (max-width:900px){ .table-desktop{display:none} .player-card{display:block} }
+
+/* Phone player row */
+.player-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:center}
+.player-row .full{grid-column:1/-1}
+.player-row .net-label{display:block;font-size:12px;color:var(--muted);text-align:center;margin-top:2px}
+
+/* Totals on phone */
+.totals-bar{display:flex;justify-content:space-between;gap:12px;padding:10px 12px;border:1px dashed var(--border);border-radius:12px;margin-top:8px;background:rgba(255,255,255,.03)}
+.totals-bar .item{flex:1;text-align:center}
+.totals-bar .item .label{display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
+.totals-bar .item .value{font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas;font-weight:800}
