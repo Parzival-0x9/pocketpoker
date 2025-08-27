@@ -5,3 +5,7 @@ dist
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+node_modules/
+.DS_Store
+dist/
+build/
