@@ -15,10 +15,10 @@ export default function PlayerRow({ p, onChange, buyInAmount }){
         <div className="meta">{p.buyIns} × {buyInAmount} = <span className="mono">A${(p.buyIns*buyInAmount).toFixed(2)}</span></div>
       </td>
       <td className="center">
-        <input className="small mono" type="number" min="0" step="0.01" value={p.cashOut} onChange={e=>update({cashOut:parseFloat(e.target.value||0)})} />
+        <input className="small mono" type="number" min="0" step="0.01" value={p.cashOut||0} onChange={e=>update({cashOut:parseFloat(e.target.value||0)})} />
         <div className="meta">cash-out</div>
       </td>
-      <td className="center mono">{(p.cashOut - p.buyIns*buyInAmount).toFixed(2)}</td>
+      <td className="center mono">{((p.cashOut||0) - p.buyIns*buyInAmount).toFixed(2)}</td>
       <td className="center"><button className="btn danger" onClick={remove}>Remove</button></td>
     </tr>
   );
