@@ -37,22 +37,17 @@ body{
     linear-gradient(180deg,#060a12 0%,#0a1020 100%);
 }
 
-/* LAYOUT */
-.container{max-width:1220px;margin:0 auto;padding:32px 18px 64px}
-.header{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
-.layout{display:grid;grid-template-columns:260px 1fr;gap:16px;margin-top:16px}
-@media (max-width:900px){.layout{grid-template-columns:1fr}.sidebar{order:2}.content{order:1}}
-
+.container{max-width:1120px;margin:0 auto;padding:64px 18px 80px}
+h1{font-family:'Playfair Display',serif;font-weight:800;letter-spacing:.02em;font-size:clamp(24px,6vw,44px);margin:0}
+.kicker{color:var(--muted);margin-top:8px}
 .surface{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px;box-shadow:var(--shadow);backdrop-filter:blur(6px)}
 .surface+.surface{margin-top:18px}
+.header{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
 .title-badge{display:inline-flex;align-items:center;gap:10px}
 .badge{padding:4px 10px;border:1px solid var(--border);background:rgba(255,255,255,.06);border-radius:999px;font-size:12px;color:var(--muted)}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap}
-.kicker{color:var(--muted);margin-top:8px}
 
-h1{font-family:'Playfair Display',serif;font-weight:800;letter-spacing:.02em;font-size:clamp(30px,3.2vw,44px);margin:0}
-h3{margin:0 0 8px 0}
-
+/* Flat buttons */
 .btn{
   appearance:none;border:1px solid var(--border);cursor:pointer;
   color:var(--text);padding:10px 14px;border-radius:12px;font-weight:800;letter-spacing:.02em;
@@ -68,23 +63,10 @@ h3{margin:0 0 8px 0}
 .btn.danger{background:linear-gradient(180deg,#ffb3ac,var(--crimson-2)); color:#2a0000}
 .btn.ghost{background:transparent;box-shadow:none;color:var(--muted)}
 
-/* Sidebar tabs */
-.sidebar .nav{display:flex;flex-direction:column;gap:10px}
-.tab{
-  display:flex;align-items:center;gap:10px;
-  width:100%;text-align:left;padding:12px 14px;border-radius:12px;border:1px solid var(--border);
-  background:linear-gradient(180deg,#2a3243,#222a3a);
-  color:var(--text);font-weight:700;letter-spacing:.02em;
-}
-.tab .meta{margin-left:auto;color:var(--muted);font-weight:600}
-.tab.active{background:linear-gradient(160deg,var(--gold-1),var(--gold-2));color:#2a1800;border-color:rgba(255,255,255,.2)}
-.tab.active .meta{color:#2a1800}
-.smallnote{font-size:12px;color:var(--muted);padding:6px 2px}
-
-/* Controls & tables */
 .controls{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;align-items:center}
 .controls .stack{grid-column:span 12;display:flex;gap:12px;flex-wrap:wrap}
 @media (min-width:860px){.controls .stack{grid-column:span 8}.controls .toggles{grid-column:span 4;justify-self:end}}
+
 label.inline{display:inline-flex;align-items:center;gap:10px}
 select,input[type="text"],input[type="number"]{background:rgba(255,255,255,.04);color:var(--text);border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;min-width:0}
 input[type="number"].small{width:96px;text-align:center}
@@ -92,7 +74,7 @@ input[type="text"].name{width:220px}
 input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 input[type=number]{-moz-appearance:textfield}
 
-.table{width:100%;border-collapse:collapse}
+.table{width:100%;border-collapse:collapse;min-width:640px}
 .table th,.table td{padding:10px 10px;border-bottom:1px dashed var(--border)}
 .table th{text-align:left;color:var(--muted);font-weight:800;letter-spacing:.04em;text-transform:uppercase;font-size:12px}
 .table th.center,.table td.center{text-align:center}
@@ -113,18 +95,51 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 
 .alert{background:rgba(255,183,3,.12); border:1px solid rgba(255,183,3,.35); color:#ffd27a; padding:10px 12px; border-radius:12px}
 
-/* Winner chip */
 .chip{display:inline-block;width:14px;height:14px;border-radius:50%;margin-left:6px;background:radial-gradient(circle at 30% 30%, #fff6, transparent 40%), conic-gradient(#b91c1c 0 20%, #4b5563 0 30%, #b91c1c 0 50%, #4b5563 0 60%, #b91c1c 0 80%, #4b5563 0 90%, #b91c1c 0 100%); border:2px solid #eee8; box-shadow:0 0 0 1px #0006 inset}
-
-/* Confetti */
 #confetti-root{position:fixed;inset:0;pointer-events:none;overflow:hidden}
 .confetti{position:fixed;top:-10px;width:6px;height:10px;opacity:0.95;animation:confettiFall 1200ms ease-out forwards}
 @keyframes confettiFall {0%{transform:translateY(-10px) rotate(0)} 100%{transform:translateY(110vh) rotate(720deg); opacity:0}}
 
-
-/* Ensure form controls are always interactive */
-.surface input, .surface select, .surface textarea, .surface button {
-  pointer-events: auto;
+/* ---------- NEW: Mobile-first navigation ---------- */
+.topbar {
+  position:fixed; top:0; left:0; right:0;
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px 14px; background:var(--card); border-bottom:1px solid var(--border); box-shadow:var(--shadow); z-index:20;
 }
-/* Safety: no overlay should block clicks */
-#confetti-root { pointer-events: none; }
+.hamburger { appearance:none; background:transparent; border:1px solid var(--border); border-radius:12px; padding:10px; color:var(--text) }
+.brand { display:flex; align-items:center; gap:10px }
+.brand h1 { font-size:20px }
+.spacer { height:64px } /* pushes content below fixed topbar */
+
+.drawer-backdrop {
+  position:fixed; inset:0; background:rgba(0,0,0,.35); backdrop-filter: blur(2px);
+  opacity:0; pointer-events:none; transition:opacity .18s ease; z-index:25;
+}
+.drawer-backdrop.open { opacity:1; pointer-events:all }
+.drawer {
+  position:fixed; top:0; left:-280px; bottom:0; width:260px; background:var(--card); border-right:1px solid var(--border);
+  padding:16px; box-shadow: var(--shadow); z-index:30; transition:left .18s ease;
+}
+.drawer.open { left:0 }
+.navgroup { display:flex; flex-direction:column; gap:10px; margin-top:8px }
+.tabbtn { padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:rgba(255,255,255,.04); cursor:pointer; text-align:left; font-weight:700 }
+.tabbtn.active { background:linear-gradient(120deg,var(--gold-1),var(--gold-2)); color:#2a1800 }
+
+/* Top tabs for desktop */
+.top-tabs { display:none; gap:8px; }
+@media (min-width:900px){
+  .top-tabs { display:flex; }
+  .hamburger { display:none; }
+  .spacer { height:88px }
+  .brand h1 { font-size:28px }
+}
+
+/* ---------- NEW: Mobile table ergonomics ---------- */
+.table-wrapper { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+@media (max-width:640px){
+  .container{padding:72px 10px 72px}
+  .surface{padding:12px}
+  input[type="text"].name{width:140px}
+  input[type="number"].small{width:72px}
+  .kicker{font-size:12px}
+}
