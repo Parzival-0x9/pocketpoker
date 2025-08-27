@@ -9,25 +9,7 @@ const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
 function useCountdownToFriday(){
   const [now,setNow]=useState(Date.now());
-  useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return (
-        <div className="pp-topbar">
-          <button className="pp-hamburger" onClick={()=>setPpDrawerOpen(true)}>☰</button>
-          <div className="pp-brand"><strong>PocketPoker</strong><span className="badge" style={{marginLeft:6}}>v7.5</span></div>
-        </div>
-        <div className={"pp-drawer-backdrop" + (ppDrawerOpen ? " pp-open" : "")} onClick={()=>setPpDrawerOpen(false)} />
-        <aside className={"pp-drawer" + (ppDrawerOpen ? " pp-open" : "")}>
-          <strong>Navigate</strong>
-          <div className="pp-nav">
-            <a href="#game" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>Game</a>
-            <a href="#history" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>History</a>
-            <a href="#ledgers" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>Ledgers</a>
-            <a href="#profiles" className="pp-tabbtn" onClick={()=>setPpDrawerOpen(false)}>Profiles</a>
-          </div>
-        </aside>
-        <div className="pp-spacer" />
-        {/* Anchor targets for smooth scroll without changing your layout */}
-        <div id="game" style={{position:'relative', top:'-60px'}}></div>
-        )=>clearInterval(i); },[]);
+  useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
   const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
   const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
   const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
@@ -35,7 +17,12 @@ function useCountdownToFriday(){
 }
 
 export default function App(){
-  const [ppDrawerOpen, setPpDrawerOpen] = React.useState(false);
+  // === Phase 1 UX drawer state ===
+  const [tab, setTab] = React.useState(() => {
+    try { return localStorage.getItem('pp_tab') || 'game'; } catch { return 'game'; }
+  });
+  const [drawerOpen, setDrawerOpen] = React.useState(false);
+  React.useEffect(() => { try { localStorage.setItem('pp_tab', tab); } catch {} }, [tab]);
 
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
@@ -287,7 +274,25 @@ export default function App(){
   }, [players, history]);
 
   return (
-    <div className="container">
+    {/* === Phase 1 Topbar + Drawer === */}
+    <div className="pp-topbar">
+      <button className="pp-hamburger" onClick={()=>setDrawerOpen(true)}>☰</button>
+      <div className="pp-brand"><strong>PocketPoker</strong><span className="badge">v7.5</span></div>
+    </div>
+    <div className={"pp-drawer-backdrop" + (drawerOpen ? " pp-open" : "")} onClick={()=>setDrawerOpen(false)} />
+    <aside className={"pp-drawer" + (drawerOpen ? " pp-open" : "")}>
+      <strong>Navigate</strong>
+      <div className="pp-nav">
+        {["game","history","ledgers","profiles"].map(id => (
+          <button key={id} className={"pp-tabbtn" + (tab===id ? " pp-active" : "")}
+                  onClick={()=>{ setTab(id); setDrawerOpen(false); }}>
+            {id[0].toUpperCase()+id.slice(1)}
+          </button>
+        ))}
+      </div>
+    </aside>
+    <div className="pp-spacer" />
+    <div className="container">{tab==="game" && (<>
       <div className="header">
         <div className="title-badge">
           <h1>PocketPoker</h1>
@@ -597,3 +602,7 @@ export default function App(){
     </div>
   );
 }
+      {tab==="history" && (<div id="history" className="surface" style={{marginTop:12}}><div className="meta">History section here (unchanged from v7.5)</div></div>)}
+      {tab==="ledgers" && (<div id="ledgers" className="surface" style={{marginTop:12}}><div className="meta">Ledgers (placeholder)</div></div>)}
+      {tab==="profiles" && (<div id="profiles" className="surface" style={{marginTop:12}}><div className="meta">Profiles (placeholder)</div></div>)}
+    </div>
