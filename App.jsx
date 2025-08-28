@@ -127,6 +127,7 @@ export default function App(){
     }
   }
 
+  // CSV export
   function downloadCSV(filename, rows){
     const csv = toCSV(rows);
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
@@ -154,6 +155,7 @@ export default function App(){
     downloadCSV("perhead.csv", r3);
   }
 
+  // confetti
   function burstConfetti(){
     let root = document.getElementById('confetti-root');
     if(!root){ root = document.createElement('div'); root.id='confetti-root'; document.body.appendChild(root); }
@@ -186,6 +188,7 @@ export default function App(){
     });
   }, [history]);
 
+  // per-head status/method + PayID
   function markPerHeadPaid(gameId, name, method){
     setHistory(h=> h.map(g=>{
       if(g.id!==gameId) return g;
@@ -215,6 +218,7 @@ export default function App(){
     }
   }
 
+  // Alerts: unpaid per-head past due
   const alerts = useMemo(()=>{
     const items=[]; const now = Date.now();
     history.forEach(g=>{
@@ -228,6 +232,7 @@ export default function App(){
     return items;
   }, [history]);
 
+  // Ledgers
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
@@ -253,6 +258,7 @@ export default function App(){
     return out;
   }, [history]);
 
+  // Suggested names
   const knownNames = useMemo(()=>{
     const set = new Set();
     players.forEach(p=> p.name && set.add(p.name));
