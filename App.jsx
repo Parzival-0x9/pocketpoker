@@ -4,8 +4,6 @@ import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
 
 const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
-const NAV="pp_nav", NAVOPEN="pp_nav_open";
-
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
@@ -33,10 +31,6 @@ export default function App(){
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
 
-  // NEW: nav
-  const [activeTab,setActiveTab] = useState(()=>localStorage.getItem(NAV) || "game");
-  const [navOpen,setNavOpen] = useState(()=> (localStorage.getItem(NAVOPEN) ?? "false") === "true");
-
   useEffect(()=>{ const s=load();
     if(s){ setPlayers(s.players?.length?s.players:[blank(),blank()]);
       setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
@@ -54,9 +48,9 @@ export default function App(){
     document.documentElement.setAttribute('data-felt', felt==='midnight'?'midnight':'emerald');
     localStorage.setItem(FELT, felt);
   }, [felt]);
-  useEffect(()=>{ localStorage.setItem(PROFILES, JSON.stringify(profiles)); }, [profiles]);
-  useEffect(()=>{ localStorage.setItem(NAV, activeTab); }, [activeTab]);
-  useEffect(()=>{ localStorage.setItem(NAVOPEN, String(navOpen)); }, [navOpen]);
+  useEffect(()=>{
+    localStorage.setItem(PROFILES, JSON.stringify(profiles));
+  }, [profiles]);
 
   const {due,days,hrs,mins,secs} = useCountdownToFriday();
 
@@ -133,6 +127,7 @@ export default function App(){
     }
   }
 
+  // CSV export
   function downloadCSV(filename, rows){
     const csv = toCSV(rows);
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
@@ -160,6 +155,7 @@ export default function App(){
     downloadCSV("perhead.csv", r3);
   }
 
+  // confetti
   function burstConfetti(){
     let root = document.getElementById('confetti-root');
     if(!root){ root = document.createElement('div'); root.id='confetti-root'; document.body.appendChild(root); }
@@ -192,6 +188,7 @@ export default function App(){
     });
   }, [history]);
 
+  // per-head status/method + PayID
   function markPerHeadPaid(gameId, name, method){
     setHistory(h=> h.map(g=>{
       if(g.id!==gameId) return g;
@@ -207,7 +204,7 @@ export default function App(){
       if(g.id!==gameId) return g;
       const ph = g.perHead || null; if(!ph) return g;
       const rec = ph.payments[name] || {paid:false, method:null, paidAt:null};
-      return { ...g, perHead: { ...ph, payments: { ...rec, method } } });
+      return { ...g, perHead: { ...ph, payments: { ...ph.payments, [name]: { ...rec, method } } } };
     }));
   }
   function copyPayID(name){
@@ -221,6 +218,7 @@ export default function App(){
     }
   }
 
+  // Alerts: unpaid per-head past due
   const alerts = useMemo(()=>{
     const items=[]; const now = Date.now();
     history.forEach(g=>{
@@ -234,6 +232,7 @@ export default function App(){
     return items;
   }, [history]);
 
+  // Ledgers
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
@@ -259,6 +258,7 @@ export default function App(){
     return out;
   }, [history]);
 
+  // Suggested names
   const knownNames = useMemo(()=>{
     const set = new Set();
     players.forEach(p=> p.name && set.add(p.name));
@@ -266,92 +266,102 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  function GameView(){
-    return (
-      <>
-        <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
+  return (
+    <div className="container">
+      <div className="header">
+        <div className="title-badge">
+          <h1>PocketPoker</h1>
+          <span className="badge">Local</span>
+        </div>
+        <div className="toolbar">
+          <div className="switch">
+            <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
+            <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
+          </div>
+          <div className="switch">
+            <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
+            <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
+          </div>
+        </div>
+      </div>
+      <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
 
-        {alerts.length>0 && (
-          <div className="surface" style={{marginTop:14}}>
-            {alerts.map(a=> (
-              <div key={a.id} className="alert" style={{marginBottom:8}}>
-                Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
-              </div>
-            ))}
+      {alerts.length>0 && (
+        <div className="surface" style={{marginTop:14}}>
+          {alerts.map(a=> (
+            <div key={a.id} className="alert" style={{marginBottom:8}}>
+              Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="surface" style={{marginTop:16}}>
+        <div className="controls">
+          <div className="stack">
+            <button className="btn primary" onClick={startGame}>Start New Game</button>
+            <button className="btn secondary" onClick={addPlayer}>Add Player</button>
+            <button className="btn danger" onClick={resetGame}>Reset Players</button>
+            <span className="pill">🎯 Enter cash-outs at the end.</span>
+          </div>
+          <div className="toggles toolbar">
+            <label className="inline">Buy-in (A$)
+              <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
+            </label>
+            <label className="inline">
+              <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
+            </label>
+            <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
+            <span className="meta">from each other player</span>
+          </div>
+        </div>
+
+        <hr className="hair" />
+
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th className="center">Buy-ins</th>
+              <th className="center">Cash-out</th>
+              <th className="center">Net</th>
+              <th className="center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {players.map(p => (<PlayerRow key={p.id} p={p} onChange={updatePlayer} buyInAmount={buyInAmount} />))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
+              <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
+              <th className="center mono">{totals.diff.toFixed(2)}</th>
+              <th className="center"></th>
+            </tr>
+          </tfoot>
+        </table>
+
+        {Math.abs(totals.diff) > 0.01 ? (
+          <div className="header" style={{marginTop:12}}>
+            <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
+            <div className="toolbar">
+              <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
+              <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save Anyway</label>
+            </div>
+          </div>
+        ) : (
+          <div className="header" style={{marginTop:12}}>
+            <div className="ribbon">✅ Balanced: totals match.</div>
+            <div className="toolbar"></div>
           </div>
         )}
 
-        <div className="surface" style={{marginTop:16}}>
-          <div className="controls">
-            <div className="stack">
-              <button className="btn primary" onClick={startGame}>Start New Game</button>
-              <button className="btn secondary" onClick={addPlayer}>Add Player</button>
-              <button className="btn danger" onClick={resetGame}>Reset Players</button>
-              <span className="pill">🎯 Enter cash-outs at the end.</span>
-            </div>
-            <div className="toggles toolbar">
-              <label className="inline">Buy-in (A$)
-                <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
-              </label>
-              <label className="inline">
-                <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
-              </label>
-              <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-              <span className="meta">from each other player</span>
-            </div>
-          </div>
-
-          <hr className="hair" />
-
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Player</th>
-                <th className="center">Buy-ins</th>
-                <th className="center">Cash-out</th>
-                <th className="center">Net</th>
-                <th className="center">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {players.map(p => (<PlayerRow key={p.id} p={p} onChange={updatePlayer} buyInAmount={buyInAmount} />))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <th>Total</th>
-                <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
-                <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
-                <th className="center mono">{totals.diff.toFixed(2)}</th>
-                <th className="center"></th>
-              </tr>
-            </tfoot>
-          </table>
-
-          {Math.abs(totals.diff) > 0.01 ? (
-            <div className="header" style={{marginTop:12}}>
-              <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
-              <div className="toolbar">
-                <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
-                <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save Anyway</label>
-              </div>
-            </div>
-          ) : (
-            <div className="header" style={{marginTop:12}}>
-              <div className="ribbon">✅ Balanced: totals match.</div>
-              <div className="toolbar"></div>
-            </div>
-          )}
-
-          <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
-            <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
-          </div>
+        <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
+          <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
         </div>
-      </>
-    );
-  }
+      </div>
 
-  function HistoryView(){
-    return (
       <div className="surface">
         <div className="header" style={{marginBottom:0}}>
           <h3 style={{margin:0}}>Game Overview (History)</h3>
@@ -481,11 +491,7 @@ export default function App(){
           </tbody>
         </table>
       </div>
-    );
-  }
 
-  function LedgersView(){
-    return (
       <div className="surface">
         <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
         <div className="meta">Clean + collapsible. Click Show to reveal who they owe / who owes them.</div>
@@ -544,11 +550,7 @@ export default function App(){
           </tbody>
         </table>
       </div>
-    );
-  }
 
-  function ProfilesView(){
-    return (
       <div className="surface">
         <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
         <div className="meta">Add optional PayIDs so it’s one tap to copy during payouts.</div>
@@ -570,61 +572,8 @@ export default function App(){
           </tbody>
         </table>
       </div>
-    );
-  }
 
-  return (
-    <div className="layout">
-      <aside className={navOpen ? "sidebar open" : "sidebar"}>
-        <div className="sidebar-header">
-          <div className="brand">♠ PocketPoker <span className="phase-badge">Phase 2</span></div>
-          <button className="btn ghost close" onClick={()=>setNavOpen(false)}>✕</button>
-        </div>
-        <nav className="nav">
-          <button className={activeTab==='game'?'nav-item active':'nav-item'} onClick={()=>{setActiveTab('game'); setNavOpen(false)}}>Game</button>
-          <button className={activeTab==='history'?'nav-item active':'nav-item'} onClick={()=>{setActiveTab('history'); setNavOpen(false)}}>History</button>
-          <button className={activeTab==='ledgers'?'nav-item active':'nav-item'} onClick={()=>{setActiveTab('ledgers'); setNavOpen(false)}}>Ledgers</button>
-          <button className={activeTab==='profiles'?'nav-item active':'nav-item'} onClick={()=>{setActiveTab('profiles'); setNavOpen(false)}}>Profiles</button>
-        </nav>
-        <div className="sidebar-footer">
-          <div className="switch">
-            <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙</button>
-            <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️</button>
-          </div>
-          <div className="switch">
-            <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚</button>
-            <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌</button>
-          </div>
-        </div>
-      </aside>
-
-      <main className="content container">
-        <div className="header">
-          <div className="title-badge">
-            <button className="btn ghost hamburger" onClick={()=>setNavOpen(true)}>☰</button>
-            <h1>PocketPoker</h1>
-            <span className="badge">Local</span>
-            <span className="badge phase">Phase 2</span>
-          </div>
-          <div className="toolbar hide-on-mobile">
-            <div className="switch">
-              <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
-              <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
-            </div>
-            <div className="switch">
-              <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
-              <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
-            </div>
-          </div>
-        </div>
-
-        {activeTab==='game' && <GameView />}
-        {activeTab==='history' && <HistoryView />}
-        {activeTab==='ledgers' && <LedgersView />}
-        {activeTab==='profiles' && <ProfilesView />}
-
-        <div className="footer meta">Tip: “Start New Game” keeps players, zeroes amounts. Per-head payments are tracked under each game's details.</div>
-      </main>
+      <div className="footer meta">Tip: “Start New Game” keeps players, zeroes amounts. Per-head payments are tracked under each game's details.</div>
     </div>
   );
 }
