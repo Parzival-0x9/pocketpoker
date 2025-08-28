@@ -1,3 +1,4 @@
+/* Tail of your existing styles + Phase 2 additions */
 :root {
   --bg: #071019; --bg-2: #0a141f; --card: rgba(13,19,30,.95); --border: rgba(255,255,255,.085);
   --text: #F4F7FF; --muted: #a7b4c7;
@@ -14,28 +15,11 @@
   --emerald-2: #10b981; --slate-2: #5c667b; --slate-3: #d1d6e0; --crimson-2: #ef4444;
   --shadow: 0 12px 28px rgba(0,0,0,.08), inset 0 1px 0 rgba(255,255,255,.6);
 }
-
 *{box-sizing:border-box}
 html,body,#root{height:100%}
-body{
-  margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Arial;
-  color:var(--text);
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Arial;color:var(--text);
   background: linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);
 }
-/* felt theme overlay */
-:root[data-felt="emerald"] body{
-  background:
-    radial-gradient(900px 500px at 85% -15%, rgba(29,191,115,.14), transparent 60%),
-    radial-gradient(900px 500px at 15% -15%, rgba(245,200,75,.12), transparent 60%),
-    linear-gradient(180deg,var(--bg) 0%,var(--bg-2) 100%);
-}
-:root[data-felt="midnight"] body{
-  background:
-    radial-gradient(900px 500px at 85% -15%, rgba(96,165,250,.10), transparent 60%),
-    radial-gradient(900px 500px at 15% -15%, rgba(168,85,247,.10), transparent 60%),
-    linear-gradient(180deg,#060a12 0%,#0a1020 100%);
-}
-
 .container{max-width:1120px;margin:0 auto;padding:32px 18px 64px}
 h1{font-family:'Playfair Display',serif;font-weight:800;letter-spacing:.02em;font-size:clamp(30px,3.2vw,44px);margin:0}
 .kicker{color:var(--muted);margin-top:8px}
@@ -44,12 +28,10 @@ h1{font-family:'Playfair Display',serif;font-weight:800;letter-spacing:.02em;fon
 .header{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
 .title-badge{display:inline-flex;align-items:center;gap:10px}
 .badge{padding:4px 10px;border:1px solid var(--border);background:rgba(255,255,255,.06);border-radius:999px;font-size:12px;color:var(--muted)}
+.badge.phase{background:linear-gradient(120deg,var(--gold-1),var(--gold-2)); color:#2a1800}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap}
 
-/* Flat buttons */
-.btn{
-  appearance:none;border:1px solid var(--border);cursor:pointer;
-  color:var(--text);padding:10px 14px;border-radius:12px;font-weight:800;letter-spacing:.02em;
+.btn{appearance:none;border:1px solid var(--border);cursor:pointer;color:var(--text);padding:10px 14px;border-radius:12px;font-weight:800;letter-spacing:.02em;
   background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.04));
   box-shadow: 0 6px 12px rgba(0,0,0,.22);
   transition: transform .05s ease, filter .2s ease, box-shadow .2s ease;
@@ -98,3 +80,36 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 #confetti-root{position:fixed;inset:0;pointer-events:none;overflow:hidden}
 .confetti{position:fixed;top:-10px;width:6px;height:10px;opacity:0.95;animation:confettiFall 1200ms ease-out forwards}
 @keyframes confettiFall {0%{transform:translateY(-10px) rotate(0)} 100%{transform:translateY(110vh) rotate(720deg); opacity:0}}
+
+/* --- Phase 2 Layout / Sidebar --- */
+.layout{display:flex;min-height:100vh}
+.sidebar{
+  position:fixed; inset:0 auto 0 0; width:260px; transform:translateX(-100%);
+  background:var(--card); border-right:1px solid var(--border); box-shadow:var(--shadow); z-index:50;
+  transition: transform .22s ease;
+  display:flex; flex-direction:column; padding:14px;
+}
+.sidebar.open{ transform:translateX(0); }
+.sidebar-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.brand{font-weight:800;letter-spacing:.02em}
+.nav{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.nav-item{
+  text-align:left; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+  background:rgba(255,255,255,.03); color:var(--text); font-weight:700; cursor:pointer;
+}
+.nav-item.active{ background:linear-gradient(120deg,var(--gold-1),var(--gold-2)); color:#2a1800; }
+.sidebar-footer{margin-top:auto; display:flex; gap:8px; flex-wrap:wrap;}
+.phase-badge{font-size:12px;margin-left:8px;opacity:.85}
+
+.content{flex:1; margin-left:0; padding-top:10px}
+.btn.hamburger{font-size:18px; padding:8px 10px}
+.btn.close{font-size:16px; padding:6px 8px}
+.hide-on-mobile{display:none}
+
+@media (min-width: 980px){
+  .sidebar{position:sticky; top:0; height:100vh; transform:none; width:260px}
+  .sidebar.open{transform:none}
+  .content{margin-left:260px}
+  .btn.hamburger{display:none}
+  .hide-on-mobile{display:flex}
+}
