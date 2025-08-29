@@ -141,3 +141,42 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 
 /* Optional: Stack table rows into compact blocks (keep simple for now) */
 /* Advanced card-rows can be added later if needed */
+
+/* ===== Mobile player card layout (≤ 680px) ===== */
+.mobile-row{ display:none; }
+.desktop-row{ display:table-row; }
+
+@media (max-width: 680px){
+  .table thead, .table tfoot{ display:none; }
+  .desktop-row{ display:none; }
+  .mobile-row{ display:table-row; }
+
+  .player-card{
+    border:1px solid var(--border);
+    border-radius:14px;
+    background:rgba(255,255,255,.03);
+    padding:12px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+  }
+  .pc-top{ display:flex; gap:8px; align-items:center; }
+  .pc-top .pc-name{ flex:1; }
+  .pc-top .pc-remove{ padding:8px 10px; }
+
+  .pc-row{ display:flex; flex-direction:column; gap:6px; }
+  .pc-label{ font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+
+  .pc-controls{ display:flex; gap:8px; align-items:center; }
+  .pc-number{ width:110px; text-align:center; }
+
+  .pc-meta{ font-size:12px; color:var(--muted); }
+
+  .pc-bottom{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pc-net{ font-weight:800; }
+  .pc-net.pos{ color:#66ffa6; }
+  .pc-net.neg{ color:#ff9a9a; }
+
+  .player-card .btn{ padding:10px 12px; }
+  .player-card input.name{ width:100%; }
+}
