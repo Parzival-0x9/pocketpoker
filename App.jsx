@@ -392,7 +392,10 @@ export default function App(){
                 {expanded[key] && (
                   <tr>
                     <td colSpan="6">
-                      <div className="detail">
+                      <div className="pp-game-details" role="dialog" aria-modal="true">
+  <div className="pp-sheet-grabber" />
+  <div className="pp-sheet-body">
+    <div className="detail">
                         <strong>Per-player results</strong>
                         <table className="table">
                           <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
@@ -499,7 +502,7 @@ export default function App(){
                     <td colSpan="3">
                       <div className="detail">
                         <table className="table">
-                          <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
+                          <thead><tr><th>They owe <em>you</em></th><th className="center">Amount</th><th>You owe <em>them</em></th><th className="center">Amount</th></tr></thead>
                           <tbody>
                             <tr>
                               <td>
