@@ -181,9 +181,8 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
   .player-card input.name{ width:100%; }
 }
 
-
-
-/* Give .detail the same look/feel as .surface on phones */
+/* === Mobile Detail Card + Non-overlapping Table (merged fix) === */
+/* Make .detail look like a proper surface card on phones */
 @media (max-width: 760px) {
   .detail {
     background: var(--card);
@@ -193,5 +192,24 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
     backdrop-filter: blur(6px);
     padding: 14px;
     margin-top: 12px;
+  }
+}
+
+/* Prevent overlap: tables in History details scroll horizontally on phones */
+@media (max-width: 760px) {
+  .detail .table {
+    display: block;                /* allow horizontal scroll */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+    white-space: nowrap;           /* keep columns on one line */
+  }
+  .detail .table thead {
+    display: table-header-group !important; /* keep headers visible */
+  }
+  .detail .table th,
+  .detail .table td {
+    padding: 8px 10px;
+    font-size: 14px;
   }
 }
