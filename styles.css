@@ -183,13 +183,7 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 
 
 
-/* Prevent History action buttons from crowding edge on small screens */
-@media (max-width: 640px) {
-  .table td .toolbar {
-    justify-content: space-around !important;
-  }
-  .table td .toolbar .btn {
-    min-width: 72px;
-    padding: 8px 10px;
-  }
+/* Ensure table headers are visible on phones */
+@media (max-width: 760px){
+  .table thead{ display: table-header-group !important; }
 }
