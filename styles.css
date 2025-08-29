@@ -1,51 +1,50 @@
 
-/* === Mobile Design Restore + Safe Compact (no bottom sheet) ===
-   Use this to revert the white/unstyled look and still fix overlap on phones.
-   - Removes position:fixed bottom-sheet behavior we added earlier.
-   - Restores your original container visuals.
-   - Keeps mobile tables from overflowing by allowing horizontal scroll.
+/* === PocketPoker Mobile Restore (strong) ===
+   Purpose: bring back the dark design on phones AND keep details usable.
+   - Neutralizes any previous bottom-sheet/positioning overrides.
+   - Uses your theme tokens (var(--card), var(--border)) rather than plain white.
+   - Keeps tables inside .detail scrollable horizontally to prevent overlap.
 */
 
-/* 1) Restore original .detail container (undo previous bottom-sheet rules) */
 @media (max-width: 760px){
+  /* Restore container visuals; no fixed sheets */
   .surface .detail{
     position: static !important;
-    left: auto !important;
-    right: auto !important;
-    bottom: auto !important;
+    inset: auto !important;        /* resets top/right/bottom/left */
     height: auto !important;
     max-height: none !important;
-    background: transparent !important;
-    border-radius: 0 !important;
+    background: var(--card) !important;
+    color: inherit !important;
+    border-radius: 12px !important;
     box-shadow: none !important;
-    padding: 0 !important;
-    overflow: visible !important;  /* container not scroll-bound */
+    padding: 10px 12px !important;
+    overflow: visible !important;  /* container itself not scroll-bound */
   }
-  /* remove the fake grabber bar */
   .surface .detail::before{ content: none !important; }
-}
 
-/* 2) Keep the tables readable on small screens (horizontal scroll only) */
-@media (max-width: 760px){
+  /* Tables: scroll horizontally instead of overlapping */
   .surface .detail .table{
-    display: block;                 /* so overflow can work on Safari */
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    max-width: 100%;
+    display: block !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    max-width: 100% !important;
+    white-space: nowrap !important;
     border-collapse: collapse;
-    white-space: nowrap;            /* columns stay in one line */
-  }
-  .surface .detail .table th,
-  .surface .detail .table td{
-    padding: 8px 10px;
-    font-size: 14px;
   }
   .surface .detail .table thead{
     display: table-header-group !important;
   }
+  .surface .detail .table th,
+  .surface .detail .table td{
+    padding: 8px 10px !important;
+    font-size: 14px !important;
+  }
+
+  /* Small spacing for pills/buttons */
+  .pill, .btn{ margin-right: 6px !important; }
 }
 
-/* 3) Small spacing for pills/buttons on narrow screens */
-@media (max-width: 760px){
-  .pill, .btn{ margin-right: 6px; }
+/* Safety: ensure dark palette on the page root (no bright fallback) */
+@media (prefers-color-scheme: dark){
+  html{ color-scheme: dark; }
 }
