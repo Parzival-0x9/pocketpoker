@@ -390,12 +390,10 @@ export default function App(){
                   </td>
                 </tr>
                 {expanded[key] && (
-  <tr>
-    <td colSpan="6" style={{padding:0}}>
-      <div className="pp-game-details" role="dialog" aria-modal="true">
-        <div className="pp-sheet-grabber" />
-        <div className="pp-sheet-body">
-          <div className="detail"><strong>Per-player results</strong>
+                  <tr>
+                    <td colSpan="6">
+                      <div className="detail">
+                        <strong>Per-player results</strong>
                         <table className="table">
                           <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
                           <tbody>
@@ -461,12 +459,11 @@ export default function App(){
                               <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
                             ))}
                           </tbody>
-                        </table></div>
-        </div>
-      </div>
-    </td>
-  </tr>
-)}
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                )}
               </React.Fragment>
             );
           })}
