@@ -1,6 +1,6 @@
 {
-  "name": "pocketpoker-v7-5",
-  "version": "0.0.0",
+  "name": "pocketpoker-v7-5-phase1-compact-mobile",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "scripts": {
