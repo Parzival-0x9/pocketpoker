@@ -498,8 +498,23 @@ export default function App(){
                   <tr>
                     <td colSpan="3">
                       <div className="detail">
-                        <table className="table">
-                          <thead><tr><th>They owe <em>you</em></th><th className="center">Amount</th><th>You owe <em>them</em></th><th className="center">Amount</th></tr></thead>
+                        
+                          {(() => {
+                            const sum = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
+                            const oweYou = sum(info.owedBy);
+                            const youOwe = sum(info.owes);
+                            return (
+                              <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
+                                {oweYou > 0 && (
+                                  <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
+                                )}
+                                {youOwe > 0 && (
+                                  <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
+                                )}
+                              </div>
+                            );
+                          })()}<table className="table">
+                          <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
                           <tbody>
                             <tr>
                               <td>

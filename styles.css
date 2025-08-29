@@ -181,3 +181,9 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
   .player-card input.name{ width:100%; }
 }
 
+
+
+/* Ensure table headers are visible on phones */
+@media (max-width: 760px){
+  .table thead{ display: table-header-group !important; }
+}
