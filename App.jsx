@@ -387,15 +387,17 @@ export default function App(){
                       <button className="btn secondary" onClick={()=>setExpanded(e=>({...e,[key]:!e[key]}))}>{expanded[key]?'Hide':'Details'}</button>
                       <button className="btn danger" onClick={()=>deleteGame(g.id)}>Delete</button>
                     </div>
-                  </td>
+                                          </div>{/* /.pp-sheet-body */}
+                      </div>{/* /.pp-game-details */}
+                      </td>
                 </tr>
                 {expanded[key] && (
                   <tr>
                     <td colSpan="6">
                       <div className="pp-game-details" role="dialog" aria-modal="true">
-                          <div className="pp-sheet-grabber" />
-                          <div className="pp-sheet-body">
-                            <div className="detail">
+                        <div className="pp-sheet-grabber" />
+                        <div className="pp-sheet-body">
+                          <div className="detail">
                         <strong>Per-player results</strong>
                         <table className="table">
                           <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
