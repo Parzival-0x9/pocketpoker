@@ -1,20 +1,26 @@
-# PocketPoker v7.5 — Phase 2 Verified
+# PocketPoker v7.5 — Phase 1 (Compact Mobile)
 
-This bundle adds the sidebar/hamburger navigation and separates **History** and **Ledgers** into dedicated tabs.
-We also changed the page title to **"PocketPoker • Phase 2"** and show a small "Phase 2" badge as a canary to confirm you're on the new build (remove later if you want).
+Compact phone-first tweak of Phase 1. Desktop unchanged; phones get tighter spacing and fewer columns.
 
-## Apply
-1. Unzip and copy everything into your working dir (replace files).
-2. `npm install`
-3. `npm run dev` (local test) or push to Vercel:
-   ```bash
-   git add -A
-   git commit -m "Phase 2 verified: sidebar + tabs"
-   git push origin main
-   ```
-4. On Vercel, Redeploy → Clear build cache.
+## What changed (mobile only, ≤480px)
+- Smaller base fonts and paddings
+- Buttons/inputs reduced height
+- Table **Actions** column hidden to fit small screens
+- History totals **Diff** column hidden on smallest screens
+- Details panels compressed
 
-## Remove the canary once confirmed
-- Delete `<span className="badge phase">Phase 2</span>` in `App.jsx` (header)
-- Remove `.phase-badge` and `.badge.phase` styles from `styles.css`
-- Optionally set `<title>PocketPoker</title>` in `index.html`
+## Run locally
+```bash
+npm install
+npm run dev
+```
+
+## Build
+```bash
+npm run build   # → dist/
+```
+
+## Deploy on Vercel
+- Framework: Vite
+- Build command: `npm run build`
+- Output directory: `dist`
