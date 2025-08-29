@@ -180,3 +180,116 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
   .player-card .btn{ padding:10px 12px; }
   .player-card input.name{ width:100%; }
 }
+```css
+/* === PocketPoker Mobile Polish (hamburger + bottom sheet + ledger badges) === */
+
+/* 1) Bigger hamburger (48x48 tap target, 28–32px icon) */
+.pp-topbar .pp-hamburger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  margin: 0 6px 0 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pp-topbar .pp-hamburger svg,
+.pp-topbar .pp-hamburger i {
+  width: 28px;  /* increase to 32px if you want it chunkier */
+  height: 28px;
+}
+
+/* Tighter top bar on small screens */
+@media (max-width: 520px) {
+  .pp-topbar {
+    height: 56px;
+    padding: 0 8px;
+    gap: 8px;
+  }
+}
+
+/* 2) Compact Game Overview details as a bottom sheet on phones */
+@media (max-width: 520px) {
+  /* Give the details container this class when visible */
+  .pp-game-details {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 72vh;
+    max-height: 560px;
+    background: var(--pp-surface, #0f1115);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    box-shadow: 0 -10px 30px rgba(0,0,0,.35);
+    overflow: hidden;
+    z-index: 9999;
+  }
+  .pp-game-details .pp-sheet-grabber {
+    width: 44px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.25);
+    margin: 8px auto 6px;
+  }
+  .pp-game-details .pp-sheet-body {
+    height: calc(72vh - 28px);
+    overflow: auto;
+    padding: 10px 12px 18px;
+  }
+
+  /* If your overview uses a table, stack it into responsive rows */
+  .pp-game-overview-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .pp-game-overview-table thead { display: none; }
+  .pp-game-overview-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .pp-game-overview-table td {
+    font-size: 14px;
+    line-height: 18px;
+  }
+  .pp-game-overview-table td[data-label]::before {
+    content: attr(data-label) ": ";
+    opacity: .7;
+  }
+}
+
+/* 3) Ledger “They owe you / You owe them” badges */
+.pp-ledger-row .pp-owe-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(0, 160, 0, .12);
+}
+.pp-ledger-row .pp-owed-by-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(230, 160, 0, .14);
+}
+.pp-ledger-row .pp-badge-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+/* Optional: widen drawer a touch on tiny phones */
+@media (max-width: 520px) {
+  .pp-drawer { width: min(88vw, 360px); }
+}
