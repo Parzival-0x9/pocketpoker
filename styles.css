@@ -183,7 +183,15 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 
 
 
-/* Ensure table headers are visible on phones */
-@media (max-width: 760px){
-  .table thead{ display: table-header-group !important; }
+/* Give .detail the same look/feel as .surface on phones */
+@media (max-width: 760px) {
+  .detail {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(6px);
+    padding: 14px;
+    margin-top: 12px;
+  }
 }
