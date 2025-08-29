@@ -183,20 +183,20 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 
 
 
-/* PP MobilePolish v1 */
+/* === PocketPoker MobilePolish v1 === */
 
-/* Bigger hamburger */
+/* Bigger hamburger hit area */
 .pp-burger{
   appearance:none;
   background:transparent;
   border:1px solid var(--border);
   border-radius:10px;
-  padding:14px; /* bigger tap area */
+  padding:14px;
   font-size:22px;
   cursor:pointer;
 }
 
-/* Game Overview bottom sheet (phones) */
+/* Bottom sheet for History details (phones) */
 @media (max-width:680px){
   .pp-game-details{
     position:fixed; left:0; right:0; bottom:0;

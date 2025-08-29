@@ -1,4 +1,3 @@
-// PP MobilePolish v1
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
@@ -394,9 +393,9 @@ export default function App(){
                   <tr>
                     <td colSpan="6">
                       <div className="pp-game-details" role="dialog" aria-modal="true">
-  <div className="pp-sheet-grabber" />
-  <div className="pp-sheet-body">
-    <div className="detail">
+                          <div className="pp-sheet-grabber" />
+                          <div className="pp-sheet-body">
+                            <div className="detail">
                         <strong>Per-player results</strong>
                         <table className="table">
                           <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
