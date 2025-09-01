@@ -1,5 +1,11 @@
-// App.jsx — Phase 2b v9 (adds Stats tab + charts)
-// Includes all prior changes (Phase 1 equal-split default, prize-from-pot logic, ledgers with prize edges).
+// App.jsx — Phase 2b.1 v10
+// Enhancements: 
+//  - FIX: Longest streak now works (Maps -> plain objects for render)
+//  - Wins scope selector: All / Last 10 / Last 20 games
+//  - Leaderboard shows Win Rate (wins / games played in scope)
+//  - Better bar labels; top bar highlighted
+//  - Cumulative chart uses scoped games (top 3 by scoped wins)
+//  - Keeps all phase 1/2a features (equal-split, prize-from-pot, ledgers with prize edges)
 
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
@@ -45,10 +51,9 @@ function settleEqualSplitCapped(rows){
 }
 // === End equal-split ===
 
-// Small helpers
-const fmt = (n)=> (n>=0?'+':'') + n.toFixed(2);
+const palette = ["#4e79a7","#f28e2c","#e15759","#76b7b2","#59a14f","#edc949","#af7aa1"];
 
-// Build an SVG path from [x,y] points
+// Build polyline path
 function toPath(points){
   if (!points.length) return "";
   return "M " + points.map(([x,y],i)=> (i===0? `${x} ${y}` : `L ${x} ${y}`)).join(" ");
@@ -58,17 +63,13 @@ export default function App(){
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
 
-  // Prize from pot: deducted from ALL players' first buy-in
   const [prizeFromPot,setPrizeFromPot]=useState(true);
   const [prizeAmount,setPrizeAmount]=useState(DEFAULT_PRIZE);
 
-  // Settlement mode (default equalSplit to avoid misclicks)
   const [settlementMode, setSettlementMode] = useState("equalSplit");
-
-  // Charts: wins counting mode
   const [winsMode, setWinsMode] = useState("fractional"); // 'fractional' | 'whole'
+  const [winsScope, setWinsScope] = useState("all"); // 'all' | 'last10' | 'last20'
 
-  // Misc state
   const [history,setHistory]=useState([]);
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
@@ -78,12 +79,10 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
 
-  // Drawer & tabs
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
   useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
 
-  // Load persisted state
   useEffect(()=>{ 
     const s=load();
     if(s){
@@ -100,7 +99,6 @@ export default function App(){
     save({players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode});
   }, [players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode]);
 
-  // Theme/felt persistence
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
     localStorage.setItem(THEME, theme);
@@ -113,13 +111,10 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
-  // Totals & derived values
   const totals=useMemo(()=>{
-    // Base nets from buy-ins and raw cash-outs
     const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
     const withNet=base.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
-    // Prize from pot (all deduct): everyone -prizeAmount; winners +pool/T
     let adjusted = withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
     if (prizeFromPot && players.length>=2) {
@@ -130,13 +125,11 @@ export default function App(){
       const pool = round2(prizeAmount * N);
       const perWinner = T>0 ? round2(pool / T) : 0;
 
-      // Deduct prize once from EVERY player
       adjusted = adjusted.map(p=>{
         const cash = round2(p.baseCash - prizeAmount);
         return {...p, prize: round2(-prizeAmount), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
       });
 
-      // Credit winners with pool split
       let distributed = 0, idx = 0;
       adjusted = adjusted.map(p=>{
         if (Math.abs((p.baseCash - p.buyIns*buyInAmount) - topNet) < 0.0001) {
@@ -155,7 +148,6 @@ export default function App(){
     const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
 
-    // Settlement basis EXCLUDES prize (game-only net)
     const basis = adjusted.map(p=>({ name: p.name || "Player", net: round2(p.netAdj - p.prize) }));
     const txns = settlementMode === "equalSplit"
       ? settleEqualSplitCapped(basis)
@@ -167,13 +159,11 @@ export default function App(){
     return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
   }, [players, buyInAmount, prizeFromPot, prizeAmount, settlementMode]);
 
-  // Player ops
   function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
   const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
   const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setStarted(true); setOverrideMismatch(false); };
   const resetGame=()=>{ setPlayers([blank(),blank()]); setStarted(false); setOverrideMismatch(false); };
 
-  // Save to history
   function saveGameToHistory(){
     const stamp = new Date().toISOString();
     const g={ id:uid(), stamp,
@@ -192,7 +182,6 @@ export default function App(){
     setHistory(h=>[g,...h]);
   }
 
-  // Helpers
   function autoBalance(){
     const {top,diff}=totals; if(!top||Math.abs(diff)<0.01) return;
     setPlayers(ps=>ps.map(p=>p.id===top.id?{...p,cashOut:round2(p.cashOut - diff)}:p));
@@ -204,7 +193,6 @@ export default function App(){
     if (window.confirm("Delete ALL saved games? This cannot be undone.")) { setHistory([]); setExpanded({}); }
   }
 
-  // CSV export
   function downloadCSV(filename, rows){
     const csv = toCSV(rows);
     const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
@@ -222,7 +210,6 @@ export default function App(){
     downloadCSV("transfers.csv", r2);
   }
 
-  // Known names for profiles
   const knownNames = useMemo(()=>{
     const set = new Set();
     players.forEach(p=> p.name && set.add(p.name));
@@ -230,7 +217,6 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // Ledgers (include settlement + prize impact + explicit prize edges per opponent)
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
@@ -239,7 +225,6 @@ export default function App(){
     };
 
     history.forEach(g=>{
-      // 1) Settlement transfers edges
       (g.txns||[]).forEach(t=>{
         const amt = round2(t.amount);
         const from=ensure(t.from), to=ensure(t.to);
@@ -249,28 +234,25 @@ export default function App(){
         to.owedBy.set(t.from, round2((to.owedBy.get(t.from)||0) + amt));
       });
 
-      // 2) Prize impact totals and pairwise prize edges (only when prize-from-pot used)
       const pm = g.settings?.prize?.mode;
       const prmAmt = typeof g.settings?.prize?.amount === 'number' ? g.settings.prize.amount : DEFAULT_PRIZE;
       const plist = g.players || [];
       plist.forEach(p=>{
         const v = ensure(p.name||"Player");
-        v.prize = round2((v.prize||0) + round2(p.prize||0)); // aggregate per-player prize
+        v.prize = round2((v.prize||0) + round2(p.prize||0));
       });
       if (pm === 'pot_all' && prmAmt > 0 && plist.length > 0) {
-        // Who were top winners by game-only net?
         const netsGameOnly = plist.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
         const top = Math.max(...netsGameOnly.map(x=>x.netGame));
         const winners = netsGameOnly.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
         const T = winners.length || 1;
         const share = round2(prmAmt / T);
-        // For each player with negative prize (they contributed), create edges to each winner
         plist.forEach(p=>{
           const pname = p.name||"Player";
           const contributed = round2(p.prize||0) < 0 ? round2(-p.prize) : 0;
           if (contributed <= 0.0001) return;
           winners.forEach(wname=>{
-            if (wname === pname) return; // skip self in owes/owedBy lists
+            if (wname === pname) return;
             const vFrom = ensure(pname), vTo = ensure(wname);
             const amt = round2(share);
             vFrom.owesPrize.set(wname, round2((vFrom.owesPrize.get(wname)||0) + amt));
@@ -295,45 +277,46 @@ export default function App(){
     return out;
   }, [history]);
 
-  // ---- Stats derivation (wins, streaks, timelines) ----
+  // ---- Stats (scoped, fractional/whole ties, win rate, streak) ----
   const stats = useMemo(()=>{
-    const games = [...history].sort((a,b)=> new Date(a.stamp) - new Date(b.stamp));
-    const wins = new Map(); // name -> total wins (fractional or whole)
-    const dates = games.map(g=> new Date(g.stamp));
-    const allNames = new Set();
-    games.forEach(g=> g.players.forEach(p=> allNames.add(p.name||"Player")));
+    const byTimeAsc = [...history].sort((a,b)=> new Date(a.stamp) - new Date(b.stamp));
+    let games = byTimeAsc;
+    if (winsScope === 'last10') games = byTimeAsc.slice(-10);
+    if (winsScope === 'last20') games = byTimeAsc.slice(-20);
 
-    // Initialize cumulative arrays
-    const cumulative = {}; // name -> array over games
-    [...allNames].forEach(n=> cumulative[n] = []);
-
-    // longest streak tracking
+    const wins = new Map();
+    const played = new Map();
+    const cumulative = {};
     const streakNow = new Map();
     const streakBest = new Map();
 
+    const allNames = new Set();
+    games.forEach(g=> g.players.forEach(p=> allNames.add(p.name||"Player")));
+    [...allNames].forEach(n=> cumulative[n] = []);
+
+    const dates = games.map(g=> new Date(g.stamp));
+
     games.forEach((g, gi)=>{
-      // game-only net for winner selection
+      const roster = new Set(g.players.map(p=> p.name||"Player"));
+      roster.forEach(n=> played.set(n, (played.get(n)||0)+1));
+
       const netsGame = g.players.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
       const top = Math.max(...netsGame.map(x=>x.netGame));
-      // Handle edge case: if all nets undefined (no players), skip
       const winners = netsGame.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
       const T = winners.length || 1;
       const add = winsMode === 'fractional' ? (1 / T) : 1;
-
-      // Update wins & streaks
       const winnersSet = new Set(winners);
+
+      // wins & streaks
       netsGame.forEach(x=>{
-        // wins
-        const prev = wins.get(x.name) || 0;
-        wins.set(x.name, round2(prev + (winnersSet.has(x.name) ? add : 0)));
-        // streaks
+        wins.set(x.name, round2((wins.get(x.name)||0) + (winnersSet.has(x.name) ? add : 0)));
         const cur = (streakNow.get(x.name) || 0);
         const next = winnersSet.has(x.name) ? cur + 1 : 0;
         streakNow.set(x.name, next);
         streakBest.set(x.name, Math.max(streakBest.get(x.name)||0, next));
       });
 
-      // Update cumulative arrays
+      // cumulative wins over time
       [...allNames].forEach(n=>{
         const prev = gi>0 ? cumulative[n][gi-1] : 0;
         const inc = winnersSet.has(n) ? add : 0;
@@ -341,25 +324,28 @@ export default function App(){
       });
     });
 
-    // Best net night (by game-only net)
+    // Best net night within scope
     let bestNight = { name:null, amount: -Infinity, date:null, gameId:null };
-    history.forEach(g=>{
+    games.forEach(g=>{
       const arr = g.players.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
       arr.forEach(x=>{
         if (x.netGame > bestNight.amount) bestNight = { name:x.name, amount:x.netGame, date: new Date(g.stamp), gameId:g.id };
       });
     });
 
-    // Sort wins leaderboard
-    const leaderboard = Array.from(wins, ([name, w]) => ({name, wins:w})).sort((a,b)=> b.wins - a.wins);
+    const leaderboard = Array.from(wins, ([name, w]) => {
+      const gp = played.get(name)||0;
+      const rate = gp>0 ? round2((w/gp)*100) : 0;
+      return {name, wins:w, played:gp, rate};
+    }).sort((a,b)=> b.wins - a.wins);
 
-    return { games, dates, wins:leaderboard, cumulative, bestNight, streakBest };
-  }, [history, winsMode]);
+    // Convert streakBest Map to plain object for rendering
+    const streakObj = Object.fromEntries(Array.from(streakBest.entries()));
 
-  // --- Simple palette for top 3 lines ---
-  const palette = ["#4e79a7","#f28e2c","#e15759"];
+    return { games, dates, wins:leaderboard, cumulative, bestNight, streakBest:streakObj };
+  }, [history, winsMode, winsScope]);
 
-  // --- UI sections ---
+  // --- GameSection ---
   const GameSection = (
     <div className="surface" style={{marginTop:16}}>
       <div className="controls">
@@ -379,7 +365,6 @@ export default function App(){
           <input className="small mono" type="number" min="0" step="1" value={prizeAmount} onChange={e=>setPrizeAmount(Math.max(0,parseFloat(e.target.value||0)))} />
           <span className="meta">deduct from all players; split pool among top winners</span>
         </div>
-        {/* Settlement mode */}
         <div className="toggles toolbar" style={{marginTop:8}}>
           <label className="inline">
             Settlement
@@ -438,6 +423,7 @@ export default function App(){
     </div>
   );
 
+  // --- HistorySection ---
   const HistorySection = (
     <div className="surface">
       <div className="header" style={{marginBottom:0}}>
@@ -650,7 +636,7 @@ export default function App(){
     </div>
   );
 
-  // ---- Stats Section (new) ----
+  // ---- Stats Section (enhanced) ----
   const StatsSection = (
     <div className="surface">
       <div className="header" style={{marginBottom:8}}>
@@ -661,6 +647,14 @@ export default function App(){
             <select value={winsMode} onChange={e=>setWinsMode(e.target.value)}>
               <option value="fractional">Fractional ties (1 ÷ T)</option>
               <option value="whole">Whole ties (1 each)</option>
+            </select>
+          </label>
+          <label className="inline">
+            Scope
+            <select value={winsScope} onChange={e=>setWinsScope(e.target.value)}>
+              <option value="all">All games</option>
+              <option value="last10">Last 10</option>
+              <option value="last20">Last 20</option>
             </select>
           </label>
         </div>
@@ -675,14 +669,10 @@ export default function App(){
         </div>
         <div className="chip-lg">
           🔥 Longest streak:&nbsp;
-          <strong>{(() => {
-            const arr = Object.entries(stats.streakBest || {}).sort((a,b)=> (b[1]-a[1]));
-            return arr[0]?.[0] || '—';
-          })()}</strong>&nbsp;
-          <span className="mono">{(() => {
-            const arr = Object.entries(stats.streakBest || {}).sort((a,b)=> (b[1]-a[1]));
-            return arr[0]?.[1] ?? 0;
-          })()}</span>
+          {(() => {
+            const entries = Object.entries(stats.streakBest || {}).sort((a,b)=> (b[1]-a[1]));
+            return <><strong>{entries[0]?.[0] || '—'}</strong>&nbsp;<span className="mono">{entries[0]?.[1] ?? 0}</span></>;
+          })()}
         </div>
         <div className="chip-lg">
           💥 Best net night:&nbsp;
@@ -693,20 +683,25 @@ export default function App(){
 
       {/* Wins Leaderboard */}
       <div className="card" style={{marginTop:12}}>
-        <div className="card-head"><strong>Wins Leaderboard</strong><span className="meta"> (game-only winners)</span></div>
+        <div className="card-head"><strong>Wins Leaderboard</strong><span className="meta"> (game-only winners, scoped)</span></div>
         {stats.wins.length===0 ? (
           <div className="meta">No games yet.</div>
         ) : (
           <div className="bars">
             {(() => {
               const max = Math.max(...stats.wins.map(x=>x.wins));
-              return stats.wins.map(x=>{
+              const bestName = stats.wins[0]?.name;
+              return stats.wins.map((x,i)=>{
                 const w = max>0 ? (x.wins/max)*100 : 0;
                 return (
                   <div key={x.name} className="bar-row">
                     <div className="bar-label">{x.name}</div>
-                    <div className="bar-track"><div className="bar-fill" style={{width:`${w}%`}} /></div>
-                    <div className="bar-value mono">{x.wins.toFixed(2)}</div>
+                    <div className="bar-track">
+                      <div className="bar-fill" style={{width:`${w}%`, background: x.name===bestName ? "linear-gradient(90deg,#f5d142,#f0b90b)" : "#4e79a7"}} />
+                    </div>
+                    <div className="bar-value mono" title={`${x.played} games`}>
+                      {x.wins.toFixed(2)}<span className="meta"> • {x.rate.toFixed(0)}%</span>
+                    </div>
                   </div>
                 );
               });
@@ -717,14 +712,13 @@ export default function App(){
 
       {/* Cumulative Wins (Top 3) */}
       <div className="card" style={{marginTop:12}}>
-        <div className="card-head"><strong>Cumulative Wins Over Time</strong><span className="meta"> (top 3 players)</span></div>
+        <div className="card-head"><strong>Cumulative Wins Over Time</strong><span className="meta"> (top 3 by scoped wins)</span></div>
         {stats.games.length===0 ? (
           <div className="meta">No games to chart.</div>
         ) : (
           <div className="svg-wrap">
             {(() => {
-              const W=640, H=200, P=28;
-              // pick top 3 by total wins
+              const W=640, H=220, P=28;
               const top3 = stats.wins.slice(0,3).map(x=>x.name);
               const nG = stats.games.length;
               const maxY = Math.max(1, ...top3.map(n => (stats.cumulative[n]?.[nG-1] || 0)));
@@ -734,7 +728,7 @@ export default function App(){
               const lines = top3.map((name, idx)=>{
                 const arr = stats.cumulative[name] || [];
                 const pts = arr.map((v,i)=> [xs(i), ys(v)]);
-                return <path key={name} d={toPath(pts)} fill="none" stroke={palette[idx%palette.length]} strokeWidth="2" />;
+                return <path key={name} d={toPath(pts)} fill="none" stroke={palette[idx%palette.length]} strokeWidth="2.5" />;
               });
 
               const xAxis = <line x1={P} y1={H-P} x2={W-P} y2={H-P} stroke="#999" />;
@@ -807,7 +801,6 @@ export default function App(){
 
   return (
     <>
-      {/* Topbar */}
       <div className="pp-topbar">
         <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
         <div className="brand">
@@ -816,7 +809,6 @@ export default function App(){
         </div>
       </div>
 
-      {/* Drawer */}
       <div className={"pp-drawer " + (sidebarOpen?'open':'')}>
         <div className="title-badge" style={{justifyContent:'space-between', width:'100%'}}>
           <strong>Menu</strong>
@@ -850,7 +842,6 @@ export default function App(){
         {tab==="stats" && StatsSection}
         {tab==="profiles" && ProfilesSection}
 
-        {/* Bottom tabbar for quick nav on mobile */}
         <div className="tabbar">
           <button className={"btn " + (tab==='game'?'primary':'secondary')} onClick={()=>setTab('game')}>Game</button>
           <button className={"btn " + (tab==='history'?'primary':'secondary')} onClick={()=>setTab('history')}>History</button>
