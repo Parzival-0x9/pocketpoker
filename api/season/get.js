@@ -1,57 +1,29 @@
 // api/season/get.js — returns season doc; clears expired lock.
 export const config = { runtime: "edge" };
 
+// Shared Upstash REST helper (path-style)
 const REST_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const REST_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-
 async function redis(command, ...args) {
-  if (!REST_URL || !REST_TOKEN) {
-    throw new Error('Missing Upstash REST env vars (KV_REST_API_URL/TOKEN or UPSTASH_REDIS_REST_URL/TOKEN)');
-  }
-  // Try POST (preferred; safe for large JSON)
-  const post = await fetch(REST_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${REST_TOKEN}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ command, args })
-  });
-  if (post.ok) {
-    const data = await post.json();
-    return data.result;
-  }
-  // Fallback to path-style GET (useful for simple commands / providers that expect it)
-  const path = [command, ...args.map(a => encodeURIComponent(String(a)))].join('/');
-  const url = REST_URL.replace(/\/$/, '') + '/' + path;
-  const get = await fetch(url, { method: 'GET', headers: { 'Authorization': `Bearer ${REST_TOKEN}` } });
-  if (!get.ok) {
-    const t = await get.text();
-    throw new Error(`Upstash error: ${get.status} ${t}`);
-  }
-  const data = await get.json();
-  return data.result;
+  if (!REST_URL || !REST_TOKEN) throw new Error("Missing Upstash REST env vars");
+  const url = REST_URL.replace(/\/$/, "") + "/" + [command, ...args.map(a => encodeURIComponent(String(a)))].join("/");
+  const res = await fetch(url, { method: "GET", headers: { Authorization: `Bearer ${REST_TOKEN}` } });
+  if (!res.ok) throw new Error(`Upstash error: ${res.status} ${await res.text()}`);
+  const data = await res.json(); return data.result;
 }
 
 function brisbaneNextMidnightISO() {
-  // Brisbane is UTC+10 year-round (no DST)
-  const now = new Date();
-  const brisbaneMs = now.getTime() + 10 * 60 * 60 * 1000;
+  const now = new Date(); const brisbaneMs = now.getTime() + 10 * 60 * 60 * 1000;
   const b = new Date(brisbaneMs);
   const next = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate() + 1, 14, 0, 0));
-  // Explanation: Brisbane midnight = UTC 14:00 of the previous day (UTC+10). We add a day above.
   return next.toISOString();
 }
-function isExpiredLock(lock) {
-  if (!lock || !lock.expiresAt) return false;
-  return Date.now() >= Date.parse(lock.expiresAt);
-}
+function isExpiredLock(lock) { return !!(lock?.expiresAt && Date.now() >= Date.parse(lock.expiresAt)); }
 function auditPush(doc, entry) {
   doc.audit = Array.isArray(doc.audit) ? doc.audit : [];
   doc.audit.unshift({ ts: new Date().toISOString(), ...entry });
-  if (doc.audit.length > 50) doc.audit.length = 50;
+  if (doc.audit.length > 200) doc.audit.length = 200;
 }
-
 
 export default async function handler(req) {
   try {
@@ -61,9 +33,8 @@ export default async function handler(req) {
     const val = await redis("GET", key);
     let doc = val ? JSON.parse(val) : null;
     if (!doc || typeof doc !== "object") {
-      doc = { seasonId: id, version: 0, updatedAt: new Date().toISOString(), games: [], lock: null, audit: [] };
+      doc = { seasonId: id, version: 0, updatedAt: new Date().toISOString(), games: [], lock: null, audit: [], profiles: {} };
     }
-    // auto-clear expired lock
     if (doc.lock && isExpiredLock(doc.lock)) {
       auditPush(doc, { action: "auto-unlock", reason: "expired", lock: doc.lock });
       doc.lock = null;
