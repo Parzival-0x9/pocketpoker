@@ -122,9 +122,9 @@ export default function App(){
       stamp: new Date().toISOString(),
       settings: { buyInAmount, prize: prizeFromPot ? { mode:'pot_all', amount:prizeAmount } : { mode:'none', amount:0 }, settlement: { mode:settlementMode } },
       players: totals.adjusted.map(p=>({ name:p.name||"Player", buyIns:p.buyIns, buyInTotal:p.buyInTotal, cashOut:p.cashOutAdj, prize:p.prize, net:p.netAdj })),
-      totals: {{ buyIns: totals.buyInSum, cashOuts: totals.cashAdjSum, diff: totals.diff }},
+      totals: { buyIns: totals.buyInSum, cashOuts: totals.cashAdjSum, diff: totals.diff },
       txns: totals.txns,
-      savedBy: {{ deviceId, deviceName: deviceName||"Unknown" }},
+      savedBy: { deviceId, deviceName: deviceName||"Unknown" },
       overrideMismatch
     };
   }
@@ -168,7 +168,7 @@ export default function App(){
     const tick=async()=>{
       try{
         const doc=await apiGetSeason();
-        if (doc.version !== cloudVersion) {{ setHistory(doc.games||[]); setCloudVersion(doc.version||0); setLock(doc.lock||null); }}
+        if (doc.version !== cloudVersion) { setHistory(doc.games||[]); setCloudVersion(doc.version||0); setLock(doc.lock||null); }
         setLastSyncAt(new Date());
         if(!dead) setTimeout(tick, document.hidden ? 30000 : 10000);
       }catch(e){ if(!dead) setTimeout(tick, 30000); }
