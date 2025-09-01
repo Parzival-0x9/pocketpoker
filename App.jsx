@@ -1,16 +1,24 @@
-// Phase 1: Equal-split per-loser (with cap & redistribute). Keeps legacy proportional as default.
-// Drop-in replacement for src/App.jsx (compatible with compact mobile tabs + drawer).
+// Phase 2a: Prize from pot (A$ per non-winner) + deterministic equal-split by default
+// - NEW: Winner(s) receive prize funded from the pot: each non-winner contributes A$amount.
+// - Ties: pool is split equally among tied top winners (last winner gets rounding cent).
+// - Keeps Phase 1 settlement modes, but DEFAULT = "equalSplit" to avoid misclicks.
+// - Removes per-head side-payment for NEW games (old history is still rendered if present).
+// - Compact mobile layout preserved (tabs + drawer).
+
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
+import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
 
-const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
+const DEFAULT_BUYIN=50, DEFAULT_PRIZE=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
-// NEW: equal-split per-loser with cap & redistribute to respect winners' remaining needs.
-// rows = [{ name, net }], where net >0 winners, net <0 losers. All values in dollars.
+// === Deterministic equal-split per-loser (cap & redistribute) ===
+// Fixed ordering so results are identical across devices:
+// - Losers processed by loss DESC, tie-break by name A→Z.
+// - Winners considered by name A→Z.
+// - The last eligible winner (in that fixed order) gets the rounding cent.
 function settleEqualSplitCapped(rows){
   const winnersBase = rows
     .filter(r=> r.net > 0.0001)
@@ -22,8 +30,7 @@ function settleEqualSplitCapped(rows){
   const txns = [];
   if (!winnersBase.length || !losersBase.length) return txns;
 
-  // FIXED ORDERING
-  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name)); // A..Z
+  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name)); // winners A→Z
   const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name)); // biggest loss first
 
   const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
@@ -32,7 +39,7 @@ function settleEqualSplitCapped(rows){
     let remaining = round2(L.loss);
     while (remaining > 0.0001) {
       const eligible = getEligible();
-      if (!eligible.length) break; // nothing left to pay (shouldn't happen if nets balance)
+      if (!eligible.length) break;
 
       const equalRaw = remaining / eligible.length;
       let distributed = 0;
@@ -43,7 +50,7 @@ function settleEqualSplitCapped(rows){
         const shareTarget = Math.min(equalRaw, w.need);
         let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
 
-        // Guard against floating point artefacts & over-giving after rounding
+        // Clamp after rounding to avoid overpayment
         give = Math.min(give, round2(w.need), round2(remaining - distributed));
 
         if (give > 0.0001) {
@@ -54,27 +61,25 @@ function settleEqualSplitCapped(rows){
       }
 
       remaining = round2(remaining - distributed);
-      if (distributed <= 0.0001) break; // safety to avoid infinite loop on tiny remainders
+      if (distributed <= 0.0001) break; // safety
     }
   });
 
   return txns;
 }
-
-function useCountdownToFriday(){
-  const [now,setNow]=useState(Date.now());
-  useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
-  const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
-  const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
-  const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
-  return { due, days, hrs, mins, secs };
-}
+// === END deterministic equal-split ===
 
 export default function App(){
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
-  const [applyPerHead,setApplyPerHead]=useState(false);
-  const [perHeadAmount,setPerHeadAmount]=useState(DEFAULT_PERHEAD);
+
+  // Phase 2a: Prize from pot (default ON @ A$20)
+  const [prizeFromPot,setPrizeFromPot]=useState(true);
+  const [prizeAmount,setPrizeAmount]=useState(DEFAULT_PRIZE);
+
+  // Settlement mode (DEFAULT equalSplit to avoid misclicks)
+  const [settlementMode, setSettlementMode] = useState("equalSplit");
+
   const [history,setHistory]=useState([]);
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
@@ -83,27 +88,35 @@ export default function App(){
   const [expanded,setExpanded]=useState({});
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
-  const [celebrated, setCelebrated] = useState(new Set());
 
   // Compact mobile: tabs + drawer
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
   useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
 
-  // NEW: settlement mode (defaults to legacy proportional)
-  const [settlementMode, setSettlementMode] = useState("proportional");
-
-  useEffect(()=>{ const s=load();
-    if(s){ setPlayers(s.players?.length?s.players:[blank(),blank()]);
+  // Load
+  useEffect(()=>{ 
+    const s=load();
+    if(s){
+      setPlayers(s.players?.length?s.players:[blank(),blank()]);
       setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
-      setApplyPerHead(!!s.applyPerHead);
-      setPerHeadAmount(s.perHeadAmount ?? DEFAULT_PERHEAD);
-      setHistory(s.history ?? []); setStarted(!!s.started);
-      if (s.settlementMode) setSettlementMode(s.settlementMode);
+
+      // Prefer Phase 2a fields if present; otherwise set defaults
+      setPrizeFromPot( typeof s.prizeFromPot === "boolean" ? s.prizeFromPot : true );
+      setPrizeAmount( typeof s.prizeAmount === "number" ? s.prizeAmount : DEFAULT_PRIZE );
+
+      // DEFAULT to equalSplit when absent/unknown
+      const mode = s.settlementMode;
+      setSettlementMode( mode === "proportional" || mode === "equalSplit" ? mode : "equalSplit" );
+
+      setHistory(s.history ?? []);
+      setStarted(!!s.started);
     }
   },[]);
-  useEffect(()=>{ save({players,buyInAmount,applyPerHead,perHeadAmount,history,started,settlementMode}) },
-    [players,buyInAmount,applyPerHead,perHeadAmount,history,started,settlementMode]);
+  useEffect(()=>{ 
+    save({players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode});
+  }, [players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode]);
+
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
     localStorage.setItem(THEME, theme);
@@ -116,43 +129,66 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
-  const {due,days,hrs,mins,secs} = useCountdownToFriday();
-
   const totals=useMemo(()=>{
+    // Base nets from buy-ins and raw cash-outs
     const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
     const withNet=base.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
-    const top=[...withNet].sort((a,b)=>b.net-a.net)[0];
-    let adjusted=withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
-    // Keep existing per-head (legacy) behavior as-is
-    if (applyPerHead && top) {
-      const heads = Math.max(0, players.length - 1);
-      adjusted = withNet.map(p=>{
-        if (p.id === top.id) {
-          const cash = round2(p.baseCash + perHeadAmount * heads);
-          return { ...p, prize: perHeadAmount*heads, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount) };
-        } else {
-          const cash = round2(p.baseCash - perHeadAmount);
-          return { ...p, prize: -perHeadAmount, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount) };
-        }
-      });
+    // Prize from pot (Phase 2a): apply to cashOutAdj / netAdj
+    let adjusted = withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
+
+    if (prizeFromPot && players.length>=2) {
+      // Find top winners (ties supported)
+      const topNet = Math.max(...withNet.map(p=>p.net));
+      const winners = withNet.filter(p=> Math.abs(p.net - topNet) < 0.0001);
+      const T = winners.length;
+      const nonWinners = withNet.filter(p=> Math.abs(p.net - topNet) >= 0.0001);
+      const pool = round2(prizeAmount * nonWinners.length);
+
+      if (T>0 && pool>0.0001) {
+        const per = round2(pool / T);
+        let distributed = 0;
+
+        // winners: +pool split
+        let idx=0;
+        adjusted = adjusted.map(p=>{
+          if (Math.abs(p.net - topNet) < 0.0001) {
+            const isLast = (idx === T-1);
+            const give = isLast ? round2(pool - distributed) : per;
+            distributed = round2(distributed + give);
+            const cash = round2(p.baseCash + give);
+            idx++;
+            return {...p, prize: give, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+          }
+          return p;
+        });
+
+        // non-winners: -prizeAmount each
+        adjusted = adjusted.map(p=>{
+          if (Math.abs(p.net - topNet) >= 0.0001) {
+            const cash = round2(p.baseCash - prizeAmount);
+            return {...p, prize: -prizeAmount, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+          }
+          return p;
+        });
+      }
     }
 
     const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
     const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
 
-    // NEW: choose settlement algorithm
+    // Settlement (DEFAULT equalSplit)
     const basis = adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj }));
     const txns = settlementMode === "equalSplit"
       ? settleEqualSplitCapped(basis)
-      : settle(basis); // legacy proportional
+      : settle(basis); // proportional (legacy)
 
-    const sorted = [...adjusted].sort((a,b)=>b.net-a.net);
-    const winner = sorted.length ? sorted[0] : null;
-    const perHeadPayers = winner ? adjusted.filter(p=>p.id!==winner.id).map(p=>p.name||"Player") : [];
-    return { adjusted, top, buyInSum, cashAdjSum, diff, txns, winner, perHeadPayers };
-  }, [players, buyInAmount, applyPerHead, perHeadAmount, settlementMode]);
+    const sorted = [...adjusted].sort((a,b)=>b.netAdj-a.netAdj);
+    const top = sorted.length ? sorted[0] : null;
+
+    return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
+  }, [players, buyInAmount, prizeFromPot, prizeAmount, settlementMode]);
 
   function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
   const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
@@ -161,26 +197,18 @@ export default function App(){
 
   function saveGameToHistory(){
     const stamp = new Date().toISOString();
-    const perHeadDue = nextFridayISO(stamp);
-    const perHeadPayments = {};
-    totals.perHeadPayers.forEach(n=> perHeadPayments[n] = { paid:false, method:null, paidAt:null });
     const g={ id:uid(), stamp,
       settings:{
         buyInAmount,
-        perHead: applyPerHead ? perHeadAmount : 0,
-        settlement: { mode: settlementMode } // NEW: persist mode
+        prize: prizeFromPot ? { mode:'pot', amount: prizeAmount } : { mode:'none', amount: 0 },
+        settlement: { mode: settlementMode }
       },
-      players: totals.adjusted.map(p=>({name:p.name||"Player",buyIns:p.buyIns,buyInTotal:p.buyInTotal,cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj})),
+      players: totals.adjusted.map(p=>({
+        name:p.name||"Player",buyIns:p.buyIns,buyInTotal:p.buyInTotal,
+        cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj
+      })),
       totals:{buyIns:totals.buyInSum,cashOuts:totals.cashAdjSum,diff:totals.diff},
-      txns: totals.txns,
-      perHead: applyPerHead ? {
-        winner: totals.winner?.name || "Winner",
-        amount: perHeadAmount,
-        payers: totals.perHeadPayers,
-        due: perHeadDue,
-        payments: perHeadPayments,
-        celebrated:false
-      } : null
+      txns: totals.txns
     };
     setHistory(h=>[g,...h]);
   }
@@ -211,7 +239,7 @@ export default function App(){
     setTimeout(()=>URL.revokeObjectURL(url), 2000);
   }
   function exportSeason(){
-    const r1 = [["game_id","stamp","player","buy_in","cash_out_adj","prize_adj","net"]];
+    const r1 = [["game_id","stamp","player","buy_in","cash_out","prize_adj","net"]];
     history.forEach(g=>{ g.players.forEach(p=> r1.push([g.id, g.stamp, p.name, p.buyInTotal, p.cashOut, p.prize, p.net])); });
     downloadCSV("players.csv", r1);
 
@@ -219,6 +247,7 @@ export default function App(){
     history.forEach(g=> (g.txns||[]).forEach(t=> r2.push([g.id, g.stamp, t.from, t.to, t.amount])));
     downloadCSV("transfers.csv", r2);
 
+    // Legacy per-head only for old games (if present)
     const r3 = [["game_id","stamp","winner","payer","amount","paid","method","paid_at","due"]];
     history.forEach(g=>{
       if(!g.perHead) return;
@@ -227,85 +256,16 @@ export default function App(){
         r3.push([g.id, g.stamp, g.perHead.winner, name, g.perHead.amount, rec.paid, rec.method, rec.paidAt, g.perHead.due]);
       });
     });
-    downloadCSV("perhead.csv", r3);
+    if (r3.length>1) downloadCSV("perhead_legacy.csv", r3);
   }
 
-  // confetti
-  function burstConfetti(){
-    let root = document.getElementById('confetti-root');
-    if(!root){ root = document.createElement('div'); root.id='confetti-root'; document.body.appendChild(root); }
-    const colors = ["#fca5a5","#93c5fd","#fde68a","#86efac","#a5b4fc"];
-    for(let i=0;i<60;i++){
-      const el = document.createElement('div');
-      el.className='confetti';
-      el.style.left = (Math.random()*100)+'vw';
-      el.style.background = colors[Math.floor(Math.random()*colors.length)];
-      el.style.transform = `rotate(${Math.random()*360}deg)`;
-      el.style.animationDelay = (Math.random()*200)+'ms';
-      el.style.width = (4+Math.random()*5)+'px';
-      el.style.height = (8+Math.random()*10)+'px';
-      root.appendChild(el);
-      setTimeout(()=>el.remove(), 1400);
-    }
-  }
-  function checkCelebrate(g){
-    if(!g.perHead || g.perHead.celebrated) return false;
-    const allPaid = g.perHead.payers.every(n=> g.perHead.payments[n]?.paid);
-    return allPaid;
-  }
-  useEffect(()=>{
-    history.forEach(g=>{
-      if(checkCelebrate(g) && !celebrated.has(g.id)){
-        burstConfetti();
-        setCelebrated(s=> new Set([...Array.from(s), g.id]));
-        setHistory(h=> h.map(x=> x.id===g.id ? {...x, perHead:{...x.perHead, celebrated:true}} : x));
-      }
-    });
-  }, [history]);
-
-  // per-head status/method + PayID
-  function markPerHeadPaid(gameId, name, method){
-    setHistory(h=> h.map(g=>{
-      if(g.id!==gameId) return g;
-      const ph = g.perHead || null; if(!ph) return g;
-      const now = new Date().toISOString();
-      const rec = ph.payments[name] || {paid:false, method:null, paidAt:null};
-      const payments = { ...ph.payments, [name]: { paid:true, method:method||rec.method||"cash", paidAt: now } };
-      return { ...g, perHead: { ...ph, payments } };
-    }));
-  }
-  function setPerHeadMethod(gameId, name, method){
-    setHistory(h=> h.map(g=>{
-      if(g.id!==gameId) return g;
-      const ph = g.perHead || null; if(!ph) return g;
-      const rec = ph.payments[name] || {paid:false, method:null, paidAt:null};
-      return { ...g, perHead: { ...ph, payments: { ...ph.payments, [name]: { ...rec, method } } } };
-    }));
-  }
-  function copyPayID(name){
-    const pid = profiles[name]?.payid;
-    if(!pid){ alert('No PayID stored for '+name); return; }
-    if(navigator.clipboard && window.isSecureContext){
-      navigator.clipboard.writeText(pid); alert('PayID copied for '+name);
-    } else {
-      const area=document.createElement('textarea'); area.value=pid; document.body.appendChild(area); area.select();
-      document.execCommand('copy'); area.remove(); alert('PayID copied for '+name);
-    }
-  }
-
-  // Alerts: unpaid per-head past due
-  const alerts = useMemo(()=>{
-    const items=[]; const now = Date.now();
-    history.forEach(g=>{
-      if(!g.perHead) return;
-      const due = new Date(g.perHead.due).getTime();
-      const unpaid = g.perHead.payers.filter(n=> !g.perHead.payments[n]?.paid);
-      if(unpaid.length && now > due){
-        items.push({ id:g.id, winner:g.perHead.winner, due:g.perHead.due, unpaid, amount:g.perHead.amount });
-      }
-    });
-    return items;
-  }, [history]);
+  // Suggested names
+  const knownNames = useMemo(()=>{
+    const set = new Set();
+    players.forEach(p=> p.name && set.add(p.name));
+    history.forEach(g=> g.players.forEach(p=> p.name && set.add(p.name)));
+    return Array.from(set).sort();
+  }, [players, history]);
 
   // Ledgers
   const ledgers = useMemo(()=>{
@@ -333,14 +293,6 @@ export default function App(){
     return out;
   }, [history]);
 
-  // Suggested names
-  const knownNames = useMemo(()=>{
-    const set = new Set();
-    players.forEach(p=> p.name && set.add(p.name));
-    history.forEach(g=> g.players.forEach(p=> p.name && set.add(p.name)));
-    return Array.from(set).sort();
-  }, [players, history]);
-
   // --- Sections ---
   const GameSection = (
     <div className="surface" style={{marginTop:16}}>
@@ -356,18 +308,18 @@ export default function App(){
             <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
           </label>
           <label className="inline">
-            <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
+            <input type="checkbox" checked={prizeFromPot} onChange={e=>setPrizeFromPot(e.target.checked)} /> Prize from pot: A$
           </label>
-          <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-          <span className="meta">from each other player</span>
+          <input className="small mono" type="number" min="0" step="1" value={prizeAmount} onChange={e=>setPrizeAmount(Math.max(0,parseFloat(e.target.value||0)))} />
+          <span className="meta">per non-winner (split among top winner(s))</span>
         </div>
-        {/* NEW: Settlement mode selector */}
+        {/* Settlement mode */}
         <div className="toggles toolbar" style={{marginTop:8}}>
           <label className="inline">
             Settlement
             <select value={settlementMode} onChange={e=>setSettlementMode(e.target.value)}>
+              <option value="equalSplit">Equal-split per loser (default)</option>
               <option value="proportional">Proportional (legacy)</option>
-              <option value="equalSplit">Equal-split per loser</option>
             </select>
           </label>
         </div>
@@ -429,7 +381,7 @@ export default function App(){
           <button className="btn danger" onClick={clearHistory}>Delete All</button>
         </div>
       </div>
-      <div className="meta">Tap details to see per-head payments and settlement transfers.</div>
+      <div className="meta">Tap details to see prize-from-pot and settlement transfers.</div>
       <table className="table">
         <thead>
           <tr>
@@ -454,6 +406,20 @@ export default function App(){
                 {p.name===winner?.name && <span className="chip" title="Top winner"/>}
               </span>
             ));
+            const prizeNote = (()=>{
+              const pm = g.settings?.prize?.mode;
+              if (pm === 'pot') {
+                const amt = g.settings?.prize?.amount ?? 0;
+                const topNet = Math.max(...g.players.map(p=>p.net));
+                const T = g.players.filter(p=> Math.abs(p.net - topNet) < 0.0001).length;
+                const N = g.players.length;
+                const pool = amt * Math.max(0, N - T);
+                return `Prize from pot: A$${amt} × ${Math.max(0,N-T)} = A$${pool.toFixed(2)} split among top ${T}`;
+              } else if (g.perHead) {
+                return `Legacy per-head: A$${g.perHead.amount} owed to ${g.perHead.winner}`;
+              }
+              return null;
+            })();
             return (
               <React.Fragment key={g.id}>
                 <tr>
@@ -473,6 +439,7 @@ export default function App(){
                   <tr>
                     <td colSpan="6">
                       <div className="detail">
+                        {prizeNote && <div className="meta" style={{marginBottom:8}}>{prizeNote}</div>}
                         <strong>Per-player results</strong>
                         <table className="table">
                           <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
@@ -489,10 +456,11 @@ export default function App(){
                           </tbody>
                         </table>
 
+                        {/* Legacy per-head section only for old games that still have it */}
                         {g.perHead && (
                           <div>
                             <div style={{height:8}} />
-                            <strong>Winner's A${g.perHead.amount} per-head payments</strong> <span className="meta">Winner: {g.perHead.winner} • Due: {new Date(g.perHead.due).toLocaleString()}</span>
+                            <strong>Legacy per-head payments</strong> <span className="meta">Winner: {g.perHead.winner} • Due: {new Date(g.perHead.due).toLocaleString()}</span>
                             <table className="table">
                               <thead><tr><th>Payer</th><th className="center">Method</th><th className="center">Status</th><th className="center">Paid at</th><th className="center">PayID</th></tr></thead>
                               <tbody>
@@ -502,24 +470,10 @@ export default function App(){
                                   return (
                                     <tr key={name}>
                                       <td>{name}</td>
-                                      <td className="center">
-                                        <select value={rec.method||""} onChange={e=>setPerHeadMethod(g.id,name,e.target.value||null)}>
-                                          <option value="">—</option>
-                                          <option value="cash">Cash</option>
-                                          <option value="payid">PayID</option>
-                                        </select>
-                                      </td>
-                                      <td className="center">
-                                        {rec.paid ? <span className="pill">Paid</span> :
-                                          <button className="btn success" onClick={()=>markPerHeadPaid(g.id,name,rec.method||'cash')}>Mark paid</button>}
-                                        {overdue && <div className="meta">⚠️ overdue</div>}
-                                      </td>
+                                      <td className="center">{rec.method || '—'}</td>
+                                      <td className="center">{rec.paid ? <span className="pill">Paid</span> : <span className="pill">Unpaid</span>}{overdue && <div className="meta">⚠️ overdue</div>}</td>
                                       <td className="center mono">{rec.paidAt ? new Date(rec.paidAt).toLocaleString() : '—'}</td>
-                                      <td className="center">
-                                        {profiles[name]?.payid ? (
-                                          <button className="btn secondary" onClick={()=>copyPayID(name)}>Copy</button>
-                                        ) : <span className="meta">—</span>}
-                                      </td>
+                                      <td className="center">{profiles[name]?.payid ? <span className="pill">has PayID</span> : <span className="meta">—</span>}</td>
                                     </tr>
                                   );
                                 })}
@@ -578,22 +532,6 @@ export default function App(){
                   <tr>
                     <td colSpan="3">
                       <div className="detail">
-                        {/* Badges for total owe/owed (mobile-friendly) */}
-                        {(() => {
-                          const sumAmt = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
-                          const oweYou = sumAmt(info.owedBy);
-                          const youOwe = sumAmt(info.owes);
-                          return (
-                            <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
-                              {oweYou > 0 && (
-                                <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
-                              )}
-                              {youOwe > 0 && (
-                                <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
-                              )}
-                            </div>
-                          );
-                        })()}
                         <table className="table">
                           <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
                           <tbody>
@@ -644,7 +582,14 @@ export default function App(){
               <tr key={n}>
                 <td>{n}</td>
                 <td><input type="text" value={v} onChange={e=>setProfiles(p=>({...p,[n]:{payid:e.target.value}}))} placeholder="email/phone PayID" /></td>
-                <td className="center">{v ? <button className="btn secondary" onClick={()=>copyPayID(n)}>Copy</button> : <span className="meta">—</span>}</td>
+                <td className="center">{v ? <button className="btn secondary" onClick={()=>{
+                  if(navigator.clipboard && window.isSecureContext){
+                    navigator.clipboard.writeText(v); alert('PayID copied for '+n);
+                  } else {
+                    const area=document.createElement('textarea'); area.value=v; document.body.appendChild(area); area.select();
+                    document.execCommand('copy'); area.remove(); alert('PayID copied for '+n);
+                  }
+                }}>Copy</button> : <span className="meta">—</span>}</td>
               </tr>
             );
           })}
@@ -661,18 +606,6 @@ export default function App(){
         <div className="brand">
           <h1>PocketPoker</h1>
           <span className="badge">Local</span>
-        </div>
-        <div className="pp-hide-mobile">
-          <div className="toolbar">
-            <div className="switch">
-              <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
-              <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
-            </div>
-            <div className="switch">
-              <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
-              <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -704,18 +637,7 @@ export default function App(){
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
       <div className="container">
-        <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
-
-        {/* Alerts visible on Game & History tabs */}
-        {(tab==="game" || tab==="history") && alerts.length>0 && (
-          <div className="surface" style={{marginTop:14}}>
-            {alerts.map(a=> (
-              <div key={a.id} className="alert" style={{marginBottom:8}}>
-                Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
-              </div>
-            ))}
-          </div>
-        )}
+        {/* No per-head countdown banner in Phase 2a */}
 
         {tab==="game" && GameSection}
         {tab==="history" && HistorySection}
@@ -730,7 +652,7 @@ export default function App(){
           <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
         </div>
 
-        <div className="footer meta">Tip: “Start New” keeps players, zeroes amounts. Per-head payments are tracked under each game.</div>
+        <div className="footer meta">Tip: “Start New” keeps players, zeroes amounts. Prize is funded from the pot.</div>
       </div>
     </>
   );
