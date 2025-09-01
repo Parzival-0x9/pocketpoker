@@ -1,4 +1,4 @@
-// api/season/get.js — returns season doc; clears expired lock.
+// api/season/lock.js — sets or clears a host lock with auto-expiry at next Brisbane midnight; audits changes.
 export const config = { runtime: "edge" };
 
 const REST_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
@@ -55,21 +55,43 @@ function auditPush(doc, entry) {
 
 export default async function handler(req) {
   try {
-    const url = new URL(req.url);
-    const id = url.searchParams.get("id") || process.env.SEASON_ID || "default";
+    if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+    const body = await req.json();
+    const id = body?.seasonId || process.env.SEASON_ID || "default";
+    const action = String(body?.action || "").toLowerCase(); // "lock" | "unlock"
+    const byName = body?.byName || req.headers.get("x-client-name") || "Unknown";
+    const deviceId = body?.deviceId || req.headers.get("x-client-id") || "unknown";
     const key = `season:${id}`;
-    const val = await redis("GET", key);
-    let doc = val ? JSON.parse(val) : null;
-    if (!doc || typeof doc !== "object") {
-      doc = { seasonId: id, version: 0, updatedAt: new Date().toISOString(), games: [], lock: null, audit: [] };
-    }
-    // auto-clear expired lock
-    if (doc.lock && isExpiredLock(doc.lock)) {
-      auditPush(doc, { action: "auto-unlock", reason: "expired", lock: doc.lock });
+
+    let doc = await redis("GET", key);
+    doc = doc ? JSON.parse(doc) : { seasonId: id, version: 0, updatedAt: new Date().toISOString(), games: [], lock: null, audit: [] };
+
+    // auto-clear expired
+    if (doc.lock && isExpiredLock(doc.lock)) doc.lock = null;
+
+    if (action === "lock") {
+      if (doc.lock) {
+        return new Response(JSON.stringify({ error: "Already locked by " + (doc.lock.byName||"Host"), lock: doc.lock }), { status: 423, headers: { "content-type": "application/json" } });
+      }
+      const now = new Date().toISOString();
+      doc.lock = { byName, deviceId, at: now, expiresAt: brisbaneNextMidnightISO() };
+      auditPush(doc, { action: "lock", byName, deviceId });
+      await redis("SET", key, JSON.stringify(doc));
+      return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type": "application/json" } });
+    } else if (action === "unlock") {
+      if (!doc.lock) {
+        return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (doc.lock.deviceId !== deviceId) {
+        return new Response(JSON.stringify({ error: "Only locker can unlock.", lock: doc.lock }), { status: 423, headers: { "content-type": "application/json" } });
+      }
+      auditPush(doc, { action: "unlock", byName, deviceId });
       doc.lock = null;
       await redis("SET", key, JSON.stringify(doc));
+      return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type": "application/json" } });
+    } else {
+      return new Response(JSON.stringify({ error: "Unknown action" }), { status: 400, headers: { "content-type": "application/json" } });
     }
-    return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type": "application/json" } });
   } catch (e) {
     return new Response(JSON.stringify({ error: e.message || "server error" }), { status: 500, headers: { "content-type": "application/json" } });
   }
