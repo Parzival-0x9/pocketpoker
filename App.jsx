@@ -1,15 +1,14 @@
-// App.jsx — Phase 2a (ALL deduct + exclude prize) — single-file drop-in
+// App.jsx — Phase 2a (ALL deduct + exclude prize) — v7 with Ledgers including prize
 // - A$20 is taken from EVERY player's first buy-in (not extra). Pool = A$20 × N.
 // - Pool is split equally among the top winner(s) (ties supported; last winner gets rounding cent).
 // - Settlement uses game-only nets (exclude prize): basis = netAdj − prize
 // - Default settlement = Equal-split per loser (deterministic ordering).
-// - Hotfix included: exportSeason() parenthesis fixed.
-// NOTE: Imports below assume PlayerRow.jsx and calc.js are in the SAME folder as this file.
-// If yours live under /src, change the two imports to "./src/PlayerRow.jsx" and "./src/calc.js".
+// - Hotfix: exportSeason() parenthesis fixed.
+// - Ledgers: now include prize impact (+ for winners, −20 for others), and show a Prize column.
 
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
+import { aud, sum, round2, settle, toCSV } from "./calc.js";
 
 const DEFAULT_BUYIN=50, DEFAULT_PRIZE=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
@@ -17,31 +16,18 @@ const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
 // === Deterministic equal-split per-loser (cap & redistribute) ===
-// Fixed ordering so phone & laptop match exactly:
-// - Losers processed by loss DESC, then name A→Z
-// - Winners considered by name A→Z
-// - Last eligible winner gets rounding cent
 function settleEqualSplitCapped(rows){
-  const winnersBase = rows
-    .filter(r=> r.net > 0.0001)
-    .map(r=>({ name: (r.name||"Player"), need: round2(r.net) }));
-  const losersBase  = rows
-    .filter(r=> r.net < -0.0001)
-    .map(r=>({ name: (r.name||"Player"), loss: round2(-r.net) }));
-
+  const winnersBase = rows.filter(r=> r.net > 0.0001).map(r=>({ name: (r.name||"Player"), need: round2(r.net) }));
+  const losersBase  = rows.filter(r=> r.net < -0.0001).map(r=>({ name: (r.name||"Player"), loss: round2(-r.net) }));
   const txns = [];
   if (!winnersBase.length || !losersBase.length) return txns;
-
   const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name));
   const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name));
-
   const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
-
   losersSorted.forEach(L => {
     let remaining = round2(L.loss);
     while (remaining > 0.0001) {
-      const eligible = getEligible();
-      if (!eligible.length) break;
+      const eligible = getEligible(); if (!eligible.length) break;
       const equalRaw = remaining / eligible.length;
       let distributed = 0;
       for (let i = 0; i < eligible.length; i++) {
@@ -237,25 +223,37 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // Ledgers
+  // Ledgers (now include prize impact)
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
-      if(!L.has(n)) L.set(n,{ net:0, owes:new Map(), owedBy:new Map() });
+      if(!L.has(n)) L.set(n,{ netTransfers:0, prize:0, owes:new Map(), owedBy:new Map() });
       return L.get(n);
     };
     history.forEach(g=>{
+      // 1) Transfers from settlement
       (g.txns||[]).forEach(t=>{
+        const amt = round2(t.amount);
         const from=ensure(t.from), to=ensure(t.to);
-        from.net -= t.amount; to.net += t.amount;
-        from.owes.set(t.to, (from.owes.get(t.to)||0) + t.amount);
-        to.owedBy.set(t.from, (to.owedBy.get(t.from)||0) + t.amount);
+        from.netTransfers = round2((from.netTransfers||0) - amt);
+        to.netTransfers   = round2((to.netTransfers||0)   + amt);
+        from.owes.set(t.to, round2((from.owes.get(t.to)||0) + amt));
+        to.owedBy.set(t.from, round2((to.owedBy.get(t.from)||0) + amt));
+      });
+      // 2) Prize impact (winners +, everyone else −20 when prize-from-pot is used)
+      (g.players||[]).forEach(p=>{
+        const name = p.name || "Player";
+        const v = ensure(name);
+        const prize = round2(p.prize || 0);
+        v.prize = round2((v.prize||0) + prize);
       });
     });
     const out = {};
     for (const [name, v] of L) {
       out[name] = {
-        net: round2(v.net),
+        net: round2((v.netTransfers||0) + (v.prize||0)),
+        prize: round2(v.prize||0),
+        netTransfers: round2(v.netTransfers||0),
         owes: Array.from(v.owes, ([to,amount])=>({to,amount:round2(amount)})),
         owedBy: Array.from(v.owedBy, ([from,amount])=>({from,amount:round2(amount)}))
       };
@@ -460,12 +458,12 @@ export default function App(){
   const LedgersSection = (
     <div className="surface">
       <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
-      <div className="meta">Clean + collapsible. Tap Show to reveal who they owe / who owes them.</div>
+      <div className="meta">Includes prize impact (+ for winners, − for others) and transfers from saved games.</div>
       <table className="table">
-        <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Actions</th></tr></thead>
+        <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Prize Impact</th><th className="center">Actions</th></tr></thead>
         <tbody>
           {Object.keys(ledgers).length===0 ? (
-            <tr><td colSpan="3" className="center meta">No history yet.</td></tr>
+            <tr><td colSpan="4" className="center meta">No history yet.</td></tr>
           ) : Object.entries(ledgers).sort((a,b)=> (b[1].net - a[1].net)).map(([name,info])=>{
             const key = name;
             return (
@@ -473,6 +471,7 @@ export default function App(){
                 <tr>
                   <td>{name}</td>
                   <td className="center mono">{info.net>=0?'+':''}{aud(info.net)}</td>
+                  <td className="center mono">{info.prize>=0?'+':''}{aud(info.prize)}</td>
                   <td className="center">
                     <button className="btn secondary" onClick={()=>setLedgerExpanded(e=>({...e,[key]:!e[key]}))}>
                       {ledgerExpanded[key] ? 'Hide' : 'Show'}
@@ -481,8 +480,11 @@ export default function App(){
                 </tr>
                 {ledgerExpanded[key] && (
                   <tr>
-                    <td colSpan="3">
+                    <td colSpan="4">
                       <div className="detail">
+                        <div className="meta" style={{marginBottom:8}}>
+                          Transfers net: {info.netTransfers>=0?'+':''}{aud(info.netTransfers)} • Prize impact: {info.prize>=0?'+':''}{aud(info.prize)} • Total: {info.net>=0?'+':''}{aud(info.net)}
+                        </div>
                         <table className="table">
                           <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
                           <tbody>
