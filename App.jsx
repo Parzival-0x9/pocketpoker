@@ -1,14 +1,13 @@
-// App.jsx — Phase 2a (ALL deduct + exclude prize) — v7 with Ledgers including prize
-// - A$20 is taken from EVERY player's first buy-in (not extra). Pool = A$20 × N.
-// - Pool is split equally among the top winner(s) (ties supported; last winner gets rounding cent).
-// - Settlement uses game-only nets (exclude prize): basis = netAdj − prize
-// - Default settlement = Equal-split per loser (deterministic ordering).
-// - Hotfix: exportSeason() parenthesis fixed.
-// - Ledgers: now include prize impact (+ for winners, −20 for others), and show a Prize column.
+// App.jsx — Phase 2a v8
+// Ledgers now:
+//   • Net Balance = settlement transfers + prize impact
+//   • Shows PRIZE edges: each non-winner owes A$prizeAmount/T to each top winner
+//     (based on the game’s saved settings + who were top winners by game-only net).
+//   • Expanded details list both settlement edges and prize edges (who they owe 20, who owes them).
 
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
+import { aud, sum, round2, settle, toCSV } from "./calc.js";
 
 const DEFAULT_BUYIN=50, DEFAULT_PRIZE=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
@@ -223,15 +222,16 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // Ledgers (now include prize impact)
+  // Ledgers (include settlement + prize impact + explicit prize edges per opponent)
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
-      if(!L.has(n)) L.set(n,{ netTransfers:0, prize:0, owes:new Map(), owedBy:new Map() });
+      if(!L.has(n)) L.set(n,{ netTransfers:0, prize:0, owes:new Map(), owedBy:new Map(), owesPrize:new Map(), owedByPrize:new Map() });
       return L.get(n);
     };
+
     history.forEach(g=>{
-      // 1) Transfers from settlement
+      // 1) Settlement transfers edges
       (g.txns||[]).forEach(t=>{
         const amt = round2(t.amount);
         const from=ensure(t.from), to=ensure(t.to);
@@ -240,14 +240,38 @@ export default function App(){
         from.owes.set(t.to, round2((from.owes.get(t.to)||0) + amt));
         to.owedBy.set(t.from, round2((to.owedBy.get(t.from)||0) + amt));
       });
-      // 2) Prize impact (winners +, everyone else −20 when prize-from-pot is used)
-      (g.players||[]).forEach(p=>{
-        const name = p.name || "Player";
-        const v = ensure(name);
-        const prize = round2(p.prize || 0);
-        v.prize = round2((v.prize||0) + prize);
+
+      // 2) Prize impact totals and pairwise prize edges (only when prize-from-pot used)
+      const pm = g.settings?.prize?.mode;
+      const prmAmt = typeof g.settings?.prize?.amount === 'number' ? g.settings.prize.amount : DEFAULT_PRIZE;
+      const plist = g.players || [];
+      plist.forEach(p=>{
+        const v = ensure(p.name||"Player");
+        v.prize = round2((v.prize||0) + round2(p.prize||0)); // aggregate per-player prize
       });
+      if (pm === 'pot_all' && prmAmt > 0 && plist.length > 0) {
+        // Who were top winners by game-only net?
+        const netsGameOnly = plist.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
+        const top = Math.max(...netsGameOnly.map(x=>x.netGame));
+        const winners = netsGameOnly.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
+        const T = winners.length || 1;
+        const share = round2(prmAmt / T);
+        // For each player with negative prize (they contributed), create edges to each winner
+        plist.forEach(p=>{
+          const pname = p.name||"Player";
+          const contributed = round2(p.prize||0) < 0 ? round2(-p.prize) : 0;
+          if (contributed <= 0.0001) return;
+          winners.forEach(wname=>{
+            if (wname === pname) return; // skip self in owes/owedBy lists
+            const vFrom = ensure(pname), vTo = ensure(wname);
+            const amt = round2(share);
+            vFrom.owesPrize.set(wname, round2((vFrom.owesPrize.get(wname)||0) + amt));
+            vTo.owedByPrize.set(pname, round2((vTo.owedByPrize.get(pname)||0) + amt));
+          });
+        });
+      }
     });
+
     const out = {};
     for (const [name, v] of L) {
       out[name] = {
@@ -255,7 +279,9 @@ export default function App(){
         prize: round2(v.prize||0),
         netTransfers: round2(v.netTransfers||0),
         owes: Array.from(v.owes, ([to,amount])=>({to,amount:round2(amount)})),
-        owedBy: Array.from(v.owedBy, ([from,amount])=>({from,amount:round2(amount)}))
+        owedBy: Array.from(v.owedBy, ([from,amount])=>({from,amount:round2(amount)})),
+        owesPrize: Array.from(v.owesPrize, ([to,amount])=>({to,amount:round2(amount)})),
+        owedByPrize: Array.from(v.owedByPrize, ([from,amount])=>({from,amount:round2(amount)}))
       };
     }
     return out;
@@ -379,14 +405,16 @@ export default function App(){
               if (pm === 'pot_all') {
                 const amt = g.settings?.prize?.amount ?? 0;
                 const N = g.players.length;
-                const topNet = Math.max(...g.players.map(p=>p.net));
-                const T = g.players.filter(p=> Math.abs(p.net - topNet) < 0.0001).length;
+                const netsGameOnly = g.players.map(p=> (p.net||0) - (p.prize||0));
+                const topNet = Math.max(...netsGameOnly);
+                const T = netsGameOnly.filter(x=> Math.abs(x - topNet) < 0.0001).length;
                 const pool = amt * N;
                 return `Prize from pot: −A$${amt} from ALL ${N} players → pool A$${pool.toFixed(2)} split among top ${T}`;
               } else if (pm === 'pot') {
                 const amt = g.settings?.prize?.amount ?? 0;
-                const topNet = Math.max(...g.players.map(p=>p.net));
-                const T = g.players.filter(p=> Math.abs(p.net - topNet) < 0.0001).length;
+                const netsGameOnly = g.players.map(p=> (p.net||0) - (p.prize||0));
+                const topNet = Math.max(...netsGameOnly);
+                const T = netsGameOnly.filter(x=> Math.abs(x - topNet) < 0.0001).length;
                 const N = g.players.length;
                 const pool = amt * Math.max(0, N - T);
                 return `Prize from pot: A$${amt} × ${Math.max(0,N-T)} = A$${pool.toFixed(2)} split among top ${T}`;
@@ -458,7 +486,7 @@ export default function App(){
   const LedgersSection = (
     <div className="surface">
       <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
-      <div className="meta">Includes prize impact (+ for winners, − for others) and transfers from saved games.</div>
+      <div className="meta">Net = Transfers + Prize impact. Expand to see who owes you A$20 (prize) and who you owe.</div>
       <table className="table">
         <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Prize Impact</th><th className="center">Actions</th></tr></thead>
         <tbody>
@@ -485,6 +513,8 @@ export default function App(){
                         <div className="meta" style={{marginBottom:8}}>
                           Transfers net: {info.netTransfers>=0?'+':''}{aud(info.netTransfers)} • Prize impact: {info.prize>=0?'+':''}{aud(info.prize)} • Total: {info.net>=0?'+':''}{aud(info.net)}
                         </div>
+
+                        <strong>Settlement transfers</strong>
                         <table className="table">
                           <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
                           <tbody>
@@ -508,6 +538,34 @@ export default function App(){
                             </tr>
                           </tbody>
                         </table>
+
+                        <div style={{height:10}} />
+
+                        <strong>Prize money (A${DEFAULT_PRIZE} per player by game)</strong>
+                        <table className="table">
+                          <thead><tr><th>They owe (prize)</th><th className="center">Amount</th><th>Owed by (prize)</th><th className="center">Amount</th></tr></thead>
+                          <tbody>
+                            <tr>
+                              <td>
+                                {(info.owesPrize||[]).length===0 ? <span className="meta">—</span> :
+                                  info.owesPrize.map((x,i)=>(<div key={i}>{x.to}</div>))}
+                              </td>
+                              <td className="center mono">
+                                {(info.owesPrize||[]).length===0 ? <span className="meta">—</span> :
+                                  info.owesPrize.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
+                              </td>
+                              <td>
+                                {(info.owedByPrize||[]).length===0 ? <span className="meta">—</span> :
+                                  info.owedByPrize.map((x,i)=>(<div key={i}>{x.from}</div>))}
+                              </td>
+                              <td className="center mono">
+                                {(info.owedByPrize||[]).length===0 ? <span className="meta">—</span> :
+                                  info.owedByPrize.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+
                       </div>
                     </td>
                   </tr>
