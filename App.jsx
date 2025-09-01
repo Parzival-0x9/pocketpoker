@@ -1,7 +1,7 @@
 // App.jsx — v12 Cloud Sync + Host Lock + Audit + Validation + Soft Rate-limit handling
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./calc.js";
+import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
 
 const DEFAULT_BUYIN=50, DEFAULT_PRIZE=20, uid=()=>Math.random().toString(36).slice(2,9);
 const API_BASE = ""; // same origin
