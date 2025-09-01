@@ -186,7 +186,7 @@ export default function App(){
   const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setStarted(true); setOverrideMismatch(false); };
   const resetGame=()=>{ setPlayers([blank(),blank()]); setStarted(false); setOverrideMismatch(false); };
 
-  function saveGameToHistory(){
+  async function saveGameToHistory(){
     const stamp = new Date().toISOString();
     const perHeadDue = nextFridayISO(stamp);
     const perHeadPayments = {};
