@@ -113,20 +113,20 @@ export default function App(){
       ? settleEqualSplitCapped(basis)
       : settle(basis);
 
-    return {{ adjusted, buyInSum, cashAdjSum, diff, txns }};
+    return { adjusted, buyInSum, cashAdjSum, diff, txns };
   }, [players,buyInAmount,prizeFromPot,prizeAmount,settlementMode]);
 
   function buildGame(){
-    return {{
+    return {
       id: uid(),
       stamp: new Date().toISOString(),
-      settings: { buyInAmount, prize: prizeFromPot ? {{ mode:'pot_all', amount:prizeAmount }} : {{ mode:'none', amount:0 }}, settlement: {{ mode:settlementMode }} },
+      settings: { buyInAmount, prize: prizeFromPot ? { mode:'pot_all', amount:prizeAmount } : { mode:'none', amount:0 }, settlement: { mode:settlementMode } },
       players: totals.adjusted.map(p=>({ name:p.name||"Player", buyIns:p.buyIns, buyInTotal:p.buyInTotal, cashOut:p.cashOutAdj, prize:p.prize, net:p.netAdj })),
       totals: {{ buyIns: totals.buyInSum, cashOuts: totals.cashAdjSum, diff: totals.diff }},
       txns: totals.txns,
       savedBy: {{ deviceId, deviceName: deviceName||"Unknown" }},
       overrideMismatch
-    }};
+    };
   }
 
   // ---- API helpers
