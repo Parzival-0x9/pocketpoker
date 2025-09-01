@@ -1,13 +1,12 @@
-// Phase 2a: Prize from pot (A$ per non-winner) + deterministic equal-split by default
-// - NEW: Winner(s) receive prize funded from the pot: each non-winner contributes A$amount.
-// - Ties: pool is split equally among tied top winners (last winner gets rounding cent).
-// - Keeps Phase 1 settlement modes, but DEFAULT = "equalSplit" to avoid misclicks.
-// - Removes per-head side-payment for NEW games (old history is still rendered if present).
-// - Compact mobile layout preserved (tabs + drawer).
+// Phase 2a (ALL deduct + exclude prize): Complete App.jsx
+// - $20 is taken from EVERY player's first buy-in (not extra). Pool = $20 × N.
+// - Pool is split equally among the top winner(s).
+// - Settlement uses game-only nets (exclude prize).
+// - Default settlement = Equal-split per loser (deterministic ordering).
 
 import React, { useMemo, useState, useEffect } from "react";
-import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
+import PlayerRow from "./PlayerRow.jsx";
+import { aud, sum, round2, settle, toCSV } from "./calc.js";
 
 const DEFAULT_BUYIN=50, DEFAULT_PRIZE=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
@@ -15,10 +14,10 @@ const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
 // === Deterministic equal-split per-loser (cap & redistribute) ===
-// Fixed ordering so results are identical across devices:
-// - Losers processed by loss DESC, tie-break by name A→Z.
-// - Winners considered by name A→Z.
-// - The last eligible winner (in that fixed order) gets the rounding cent.
+// Fixed ordering so phone & laptop match exactly:
+// - Losers processed by loss DESC, then name A→Z
+// - Winners considered by name A→Z
+// - Last eligible winner gets rounding cent
 function settleEqualSplitCapped(rows){
   const winnersBase = rows
     .filter(r=> r.net > 0.0001)
@@ -30,8 +29,8 @@ function settleEqualSplitCapped(rows){
   const txns = [];
   if (!winnersBase.length || !losersBase.length) return txns;
 
-  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name)); // winners A→Z
-  const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name)); // biggest loss first
+  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name));
+  const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name));
 
   const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
 
@@ -40,46 +39,40 @@ function settleEqualSplitCapped(rows){
     while (remaining > 0.0001) {
       const eligible = getEligible();
       if (!eligible.length) break;
-
       const equalRaw = remaining / eligible.length;
       let distributed = 0;
-
       for (let i = 0; i < eligible.length; i++) {
         const w = eligible[i];
         const isLast = i === eligible.length - 1;
         const shareTarget = Math.min(equalRaw, w.need);
         let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
-
-        // Clamp after rounding to avoid overpayment
         give = Math.min(give, round2(w.need), round2(remaining - distributed));
-
         if (give > 0.0001) {
           txns.push({ from: L.name, to: w.name, amount: round2(give) });
           w.need = round2(w.need - give);
           distributed = round2(distributed + give);
         }
       }
-
       remaining = round2(remaining - distributed);
-      if (distributed <= 0.0001) break; // safety
+      if (distributed <= 0.0001) break;
     }
   });
-
   return txns;
 }
-// === END deterministic equal-split ===
+// === End equal-split ===
 
 export default function App(){
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
 
-  // Phase 2a: Prize from pot (default ON @ A$20)
+  // Prize from pot: deducted from ALL players' first buy-in
   const [prizeFromPot,setPrizeFromPot]=useState(true);
   const [prizeAmount,setPrizeAmount]=useState(DEFAULT_PRIZE);
 
-  // Settlement mode (DEFAULT equalSplit to avoid misclicks)
+  // Settlement mode (default equalSplit to avoid misclicks)
   const [settlementMode, setSettlementMode] = useState("equalSplit");
 
+  // Misc state
   const [history,setHistory]=useState([]);
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
@@ -89,26 +82,20 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
 
-  // Compact mobile: tabs + drawer
+  // Drawer & tabs
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
   useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
 
-  // Load
+  // Load persisted state
   useEffect(()=>{ 
     const s=load();
     if(s){
       setPlayers(s.players?.length?s.players:[blank(),blank()]);
       setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
-
-      // Prefer Phase 2a fields if present; otherwise set defaults
       setPrizeFromPot( typeof s.prizeFromPot === "boolean" ? s.prizeFromPot : true );
       setPrizeAmount( typeof s.prizeAmount === "number" ? s.prizeAmount : DEFAULT_PRIZE );
-
-      // DEFAULT to equalSplit when absent/unknown
-      const mode = s.settlementMode;
-      setSettlementMode( mode === "proportional" || mode === "equalSplit" ? mode : "equalSplit" );
-
+      setSettlementMode( s.settlementMode === "proportional" || s.settlementMode === "equalSplit" ? s.settlementMode : "equalSplit" );
       setHistory(s.history ?? []);
       setStarted(!!s.started);
     }
@@ -117,6 +104,7 @@ export default function App(){
     save({players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode});
   }, [players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode]);
 
+  // Theme/felt persistence
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
     localStorage.setItem(THEME, theme);
@@ -129,60 +117,53 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
+  // Totals & derived values
   const totals=useMemo(()=>{
     // Base nets from buy-ins and raw cash-outs
     const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
     const withNet=base.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
-    // Prize from pot (Phase 2a): apply to cashOutAdj / netAdj
+    // Prize from pot (all deduct): everyone -prizeAmount; winners +pool/T
     let adjusted = withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
     if (prizeFromPot && players.length>=2) {
-      // Find top winners (ties supported)
+      const N = adjusted.length;
       const topNet = Math.max(...withNet.map(p=>p.net));
       const winners = withNet.filter(p=> Math.abs(p.net - topNet) < 0.0001);
       const T = winners.length;
-      const nonWinners = withNet.filter(p=> Math.abs(p.net - topNet) >= 0.0001);
-      const pool = round2(prizeAmount * nonWinners.length);
+      const pool = round2(prizeAmount * N);
+      const perWinner = T>0 ? round2(pool / T) : 0;
 
-      if (T>0 && pool>0.0001) {
-        const per = round2(pool / T);
-        let distributed = 0;
+      // Deduct prize once from EVERY player
+      adjusted = adjusted.map(p=>{
+        const cash = round2(p.baseCash - prizeAmount);
+        return {...p, prize: round2(-prizeAmount), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+      });
 
-        // winners: +pool split
-        let idx=0;
-        adjusted = adjusted.map(p=>{
-          if (Math.abs(p.net - topNet) < 0.0001) {
-            const isLast = (idx === T-1);
-            const give = isLast ? round2(pool - distributed) : per;
-            distributed = round2(distributed + give);
-            const cash = round2(p.baseCash + give);
-            idx++;
-            return {...p, prize: give, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
-          }
-          return p;
-        });
-
-        // non-winners: -prizeAmount each
-        adjusted = adjusted.map(p=>{
-          if (Math.abs(p.net - topNet) >= 0.0001) {
-            const cash = round2(p.baseCash - prizeAmount);
-            return {...p, prize: -prizeAmount, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
-          }
-          return p;
-        });
-      }
+      // Credit winners with pool split
+      let distributed = 0, idx = 0;
+      adjusted = adjusted.map(p=>{
+        if (Math.abs((p.baseCash - p.buyIns*buyInAmount) - topNet) < 0.0001) {
+          const isLast = idx === T-1;
+          const give = isLast ? round2(pool - distributed) : perWinner;
+          distributed = round2(distributed + give);
+          const cash = round2(p.cashOutAdj + give);
+          idx++;
+          return {...p, prize: round2(p.prize + give), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+        }
+        return p;
+      });
     }
 
     const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
     const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
 
-    // Settlement (DEFAULT equalSplit)
-    const basis = adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj }));
+    // Settlement basis EXCLUDES prize (game-only net)
+    const basis = adjusted.map(p=>({ name: p.name || "Player", net: round2(p.netAdj - p.prize) }));
     const txns = settlementMode === "equalSplit"
       ? settleEqualSplitCapped(basis)
-      : settle(basis); // proportional (legacy)
+      : settle(basis);
 
     const sorted = [...adjusted].sort((a,b)=>b.netAdj-a.netAdj);
     const top = sorted.length ? sorted[0] : null;
@@ -190,17 +171,19 @@ export default function App(){
     return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
   }, [players, buyInAmount, prizeFromPot, prizeAmount, settlementMode]);
 
+  // Player ops
   function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
   const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
   const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setStarted(true); setOverrideMismatch(false); };
   const resetGame=()=>{ setPlayers([blank(),blank()]); setStarted(false); setOverrideMismatch(false); };
 
+  // Save to history
   function saveGameToHistory(){
     const stamp = new Date().toISOString();
     const g={ id:uid(), stamp,
       settings:{
         buyInAmount,
-        prize: prizeFromPot ? { mode:'pot', amount: prizeAmount } : { mode:'none', amount: 0 },
+        prize: prizeFromPot ? { mode:'pot_all', amount: prizeAmount } : { mode:'none', amount: 0 },
         settlement: { mode: settlementMode }
       },
       players: totals.adjusted.map(p=>({
@@ -213,21 +196,16 @@ export default function App(){
     setHistory(h=>[g,...h]);
   }
 
+  // Helpers
   function autoBalance(){
     const {top,diff}=totals; if(!top||Math.abs(diff)<0.01) return;
     setPlayers(ps=>ps.map(p=>p.id===top.id?{...p,cashOut:round2(p.cashOut - diff)}:p));
   }
-
   function deleteGame(id){
-    if (window.confirm("Delete this game from history?")) {
-      setHistory(h=> h.filter(g=> g.id !== id));
-    }
+    if (window.confirm("Delete this game from history?")) setHistory(h=> h.filter(g=> g.id !== id));
   }
   function clearHistory(){
-    if (window.confirm("Delete ALL saved games? This cannot be undone.")) {
-      setHistory([]);
-      setExpanded({});
-    }
+    if (window.confirm("Delete ALL saved games? This cannot be undone.")) { setHistory([]); setExpanded({}); }
   }
 
   // CSV export
@@ -244,22 +222,11 @@ export default function App(){
     downloadCSV("players.csv", r1);
 
     const r2 = [["game_id","stamp","from","to","amount"]];
-    history.forEach(g=> (g.txns||[]).forEach(t=> r2.push([g.id, g.stamp, t.from, t.to, t.amount])));
+    history.forEach(g=> (g.txns||[]).forEach(t=> r2.push([g.id, g.stamp, t.from, t.to, t.amount]));
     downloadCSV("transfers.csv", r2);
-
-    // Legacy per-head only for old games (if present)
-    const r3 = [["game_id","stamp","winner","payer","amount","paid","method","paid_at","due"]];
-    history.forEach(g=>{
-      if(!g.perHead) return;
-      g.perHead.payers.forEach(name=>{
-        const rec = g.perHead.payments?.[name] || {paid:false,method:null,paidAt:null};
-        r3.push([g.id, g.stamp, g.perHead.winner, name, g.perHead.amount, rec.paid, rec.method, rec.paidAt, g.perHead.due]);
-      });
-    });
-    if (r3.length>1) downloadCSV("perhead_legacy.csv", r3);
   }
 
-  // Suggested names
+  // Known names for profiles
   const knownNames = useMemo(()=>{
     const set = new Set();
     players.forEach(p=> p.name && set.add(p.name));
@@ -293,7 +260,7 @@ export default function App(){
     return out;
   }, [history]);
 
-  // --- Sections ---
+  // --- UI sections ---
   const GameSection = (
     <div className="surface" style={{marginTop:16}}>
       <div className="controls">
@@ -311,7 +278,7 @@ export default function App(){
             <input type="checkbox" checked={prizeFromPot} onChange={e=>setPrizeFromPot(e.target.checked)} /> Prize from pot: A$
           </label>
           <input className="small mono" type="number" min="0" step="1" value={prizeAmount} onChange={e=>setPrizeAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-          <span className="meta">per non-winner (split among top winner(s))</span>
+          <span className="meta">deduct from all players; split pool among top winners</span>
         </div>
         {/* Settlement mode */}
         <div className="toggles toolbar" style={{marginTop:8}}>
@@ -408,7 +375,14 @@ export default function App(){
             ));
             const prizeNote = (()=>{
               const pm = g.settings?.prize?.mode;
-              if (pm === 'pot') {
+              if (pm === 'pot_all') {
+                const amt = g.settings?.prize?.amount ?? 0;
+                const N = g.players.length;
+                const topNet = Math.max(...g.players.map(p=>p.net));
+                const T = g.players.filter(p=> Math.abs(p.net - topNet) < 0.0001).length;
+                const pool = amt * N;
+                return `Prize from pot: −A$${amt} from ALL ${N} players → pool A$${pool.toFixed(2)} split among top ${T}`;
+              } else if (pm === 'pot') {
                 const amt = g.settings?.prize?.amount ?? 0;
                 const topNet = Math.max(...g.players.map(p=>p.net));
                 const T = g.players.filter(p=> Math.abs(p.net - topNet) < 0.0001).length;
@@ -455,32 +429,6 @@ export default function App(){
                             ))}
                           </tbody>
                         </table>
-
-                        {/* Legacy per-head section only for old games that still have it */}
-                        {g.perHead && (
-                          <div>
-                            <div style={{height:8}} />
-                            <strong>Legacy per-head payments</strong> <span className="meta">Winner: {g.perHead.winner} • Due: {new Date(g.perHead.due).toLocaleString()}</span>
-                            <table className="table">
-                              <thead><tr><th>Payer</th><th className="center">Method</th><th className="center">Status</th><th className="center">Paid at</th><th className="center">PayID</th></tr></thead>
-                              <tbody>
-                                {g.perHead.payers.map(name=>{
-                                  const rec = g.perHead.payments?.[name] || {paid:false,method:null,paidAt:null};
-                                  const overdue = !rec.paid && (Date.now() > new Date(g.perHead.due).getTime());
-                                  return (
-                                    <tr key={name}>
-                                      <td>{name}</td>
-                                      <td className="center">{rec.method || '—'}</td>
-                                      <td className="center">{rec.paid ? <span className="pill">Paid</span> : <span className="pill">Unpaid</span>}{overdue && <div className="meta">⚠️ overdue</div>}</td>
-                                      <td className="center mono">{rec.paidAt ? new Date(rec.paidAt).toLocaleString() : '—'}</td>
-                                      <td className="center">{profiles[name]?.payid ? <span className="pill">has PayID</span> : <span className="meta">—</span>}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
 
                         <div style={{height:8}} />
                         <strong>Transfers for settlement</strong> <span className="meta">Mode: {g.settings?.settlement?.mode === 'equalSplit' ? 'Equal-split per loser' : 'Proportional (legacy)'}</span>
@@ -637,8 +585,6 @@ export default function App(){
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
       <div className="container">
-        {/* No per-head countdown banner in Phase 2a */}
-
         {tab==="game" && GameSection}
         {tab==="history" && HistorySection}
         {tab==="ledgers" && LedgersSection}
@@ -652,7 +598,7 @@ export default function App(){
           <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
         </div>
 
-        <div className="footer meta">Tip: “Start New” keeps players, zeroes amounts. Prize is funded from the pot.</div>
+        <div className="footer meta">Tip: settlement ignores prize; it splits only game results.</div>
       </div>
     </>
   );
