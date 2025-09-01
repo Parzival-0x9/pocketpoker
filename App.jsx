@@ -12,41 +12,49 @@ const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 // NEW: equal-split per-loser with cap & redistribute to respect winners' remaining needs.
 // rows = [{ name, net }], where net >0 winners, net <0 losers. All values in dollars.
 function settleEqualSplitCapped(rows){
-  const winnersBase = rows.filter(r=> r.net > 0.0001).map(r=>({ name: r.name || "Player", need: round2(r.net) }));
-  const losersBase  = rows.filter(r=> r.net < -0.0001).map(r=>({ name: r.name || "Player", loss: round2(-r.net) }));
+  const winnersBase = rows
+    .filter(r=> r.net > 0.0001)
+    .map(r=>({ name: (r.name||"Player"), need: round2(r.net) }));
+  const losersBase  = rows
+    .filter(r=> r.net < -0.0001)
+    .map(r=>({ name: (r.name||"Player"), loss: round2(-r.net) }));
+
   const txns = [];
   if (!winnersBase.length || !losersBase.length) return txns;
 
-  // For deterministic output
-  const winnersOrder = [...winnersBase]; // keep insertion order
+  // FIXED ORDERING
+  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name)); // A..Z
+  const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name)); // biggest loss first
+
   const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
 
-  losersBase.forEach(L => {
+  losersSorted.forEach(L => {
     let remaining = round2(L.loss);
     while (remaining > 0.0001) {
       const eligible = getEligible();
-      if (!eligible.length) break; // nothing more to pay (should not happen if nets balance)
+      if (!eligible.length) break; // nothing left to pay (shouldn't happen if nets balance)
 
-      // Split equally across eligible winners
       const equalRaw = remaining / eligible.length;
-      // We'll allocate to all but the last, rounding each to cents, and give the last the remainder to keep exact.
       let distributed = 0;
+
       for (let i = 0; i < eligible.length; i++) {
         const w = eligible[i];
         const isLast = i === eligible.length - 1;
-        const shareTarget = Math.min(equalRaw, w.need); // cap at remaining need
+        const shareTarget = Math.min(equalRaw, w.need);
         let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
-        // Guard against floating artefacts and over-giving due to rounding
+
+        // Guard against floating point artefacts & over-giving after rounding
         give = Math.min(give, round2(w.need), round2(remaining - distributed));
+
         if (give > 0.0001) {
           txns.push({ from: L.name, to: w.name, amount: round2(give) });
           w.need = round2(w.need - give);
           distributed = round2(distributed + give);
         }
       }
+
       remaining = round2(remaining - distributed);
-      // If we couldn't distribute anything (e.g., all needs ~0 due to rounding), break to avoid infinite loop.
-      if (distributed <= 0.0001) break;
+      if (distributed <= 0.0001) break; // safety to avoid infinite loop on tiny remainders
     }
   });
 
