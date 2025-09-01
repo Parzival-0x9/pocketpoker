@@ -1,9 +1,5 @@
-// App.jsx — Phase 2a v8
-// Ledgers now:
-//   • Net Balance = settlement transfers + prize impact
-//   • Shows PRIZE edges: each non-winner owes A$prizeAmount/T to each top winner
-//     (based on the game’s saved settings + who were top winners by game-only net).
-//   • Expanded details list both settlement edges and prize edges (who they owe 20, who owes them).
+// App.jsx — Phase 2b v9 (adds Stats tab + charts)
+// Includes all prior changes (Phase 1 equal-split default, prize-from-pot logic, ledgers with prize edges).
 
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
@@ -49,6 +45,15 @@ function settleEqualSplitCapped(rows){
 }
 // === End equal-split ===
 
+// Small helpers
+const fmt = (n)=> (n>=0?'+':'') + n.toFixed(2);
+
+// Build an SVG path from [x,y] points
+function toPath(points){
+  if (!points.length) return "";
+  return "M " + points.map(([x,y],i)=> (i===0? `${x} ${y}` : `L ${x} ${y}`)).join(" ");
+}
+
 export default function App(){
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
@@ -59,6 +64,9 @@ export default function App(){
 
   // Settlement mode (default equalSplit to avoid misclicks)
   const [settlementMode, setSettlementMode] = useState("equalSplit");
+
+  // Charts: wins counting mode
+  const [winsMode, setWinsMode] = useState("fractional"); // 'fractional' | 'whole'
 
   // Misc state
   const [history,setHistory]=useState([]);
@@ -286,6 +294,70 @@ export default function App(){
     }
     return out;
   }, [history]);
+
+  // ---- Stats derivation (wins, streaks, timelines) ----
+  const stats = useMemo(()=>{
+    const games = [...history].sort((a,b)=> new Date(a.stamp) - new Date(b.stamp));
+    const wins = new Map(); // name -> total wins (fractional or whole)
+    const dates = games.map(g=> new Date(g.stamp));
+    const allNames = new Set();
+    games.forEach(g=> g.players.forEach(p=> allNames.add(p.name||"Player")));
+
+    // Initialize cumulative arrays
+    const cumulative = {}; // name -> array over games
+    [...allNames].forEach(n=> cumulative[n] = []);
+
+    // longest streak tracking
+    const streakNow = new Map();
+    const streakBest = new Map();
+
+    games.forEach((g, gi)=>{
+      // game-only net for winner selection
+      const netsGame = g.players.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
+      const top = Math.max(...netsGame.map(x=>x.netGame));
+      // Handle edge case: if all nets undefined (no players), skip
+      const winners = netsGame.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
+      const T = winners.length || 1;
+      const add = winsMode === 'fractional' ? (1 / T) : 1;
+
+      // Update wins & streaks
+      const winnersSet = new Set(winners);
+      netsGame.forEach(x=>{
+        // wins
+        const prev = wins.get(x.name) || 0;
+        wins.set(x.name, round2(prev + (winnersSet.has(x.name) ? add : 0)));
+        // streaks
+        const cur = (streakNow.get(x.name) || 0);
+        const next = winnersSet.has(x.name) ? cur + 1 : 0;
+        streakNow.set(x.name, next);
+        streakBest.set(x.name, Math.max(streakBest.get(x.name)||0, next));
+      });
+
+      // Update cumulative arrays
+      [...allNames].forEach(n=>{
+        const prev = gi>0 ? cumulative[n][gi-1] : 0;
+        const inc = winnersSet.has(n) ? add : 0;
+        cumulative[n][gi] = round2(prev + inc);
+      });
+    });
+
+    // Best net night (by game-only net)
+    let bestNight = { name:null, amount: -Infinity, date:null, gameId:null };
+    history.forEach(g=>{
+      const arr = g.players.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
+      arr.forEach(x=>{
+        if (x.netGame > bestNight.amount) bestNight = { name:x.name, amount:x.netGame, date: new Date(g.stamp), gameId:g.id };
+      });
+    });
+
+    // Sort wins leaderboard
+    const leaderboard = Array.from(wins, ([name, w]) => ({name, wins:w})).sort((a,b)=> b.wins - a.wins);
+
+    return { games, dates, wins:leaderboard, cumulative, bestNight, streakBest };
+  }, [history, winsMode]);
+
+  // --- Simple palette for top 3 lines ---
+  const palette = ["#4e79a7","#f28e2c","#e15759"];
 
   // --- UI sections ---
   const GameSection = (
@@ -578,6 +650,130 @@ export default function App(){
     </div>
   );
 
+  // ---- Stats Section (new) ----
+  const StatsSection = (
+    <div className="surface">
+      <div className="header" style={{marginBottom:8}}>
+        <h3 style={{margin:0}}>Stats & Charts</h3>
+        <div className="toolbar">
+          <label className="inline">
+            Wins mode
+            <select value={winsMode} onChange={e=>setWinsMode(e.target.value)}>
+              <option value="fractional">Fractional ties (1 ÷ T)</option>
+              <option value="whole">Whole ties (1 each)</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      {/* Top chips */}
+      <div className="chips">
+        <div className="chip-lg">
+          🥇 Most wins:&nbsp;
+          <strong>{stats.wins[0]?.name ?? '—'}</strong>&nbsp;
+          <span className="mono">{(stats.wins[0]?.wins ?? 0).toFixed(2)}</span>
+        </div>
+        <div className="chip-lg">
+          🔥 Longest streak:&nbsp;
+          <strong>{(() => {
+            const arr = Object.entries(stats.streakBest || {}).sort((a,b)=> (b[1]-a[1]));
+            return arr[0]?.[0] || '—';
+          })()}</strong>&nbsp;
+          <span className="mono">{(() => {
+            const arr = Object.entries(stats.streakBest || {}).sort((a,b)=> (b[1]-a[1]));
+            return arr[0]?.[1] ?? 0;
+          })()}</span>
+        </div>
+        <div className="chip-lg">
+          💥 Best net night:&nbsp;
+          <strong>{stats.bestNight.name ?? '—'}</strong>&nbsp;
+          <span className="mono">{Number.isFinite(stats.bestNight.amount) ? aud(stats.bestNight.amount) : '—'}</span>
+        </div>
+      </div>
+
+      {/* Wins Leaderboard */}
+      <div className="card" style={{marginTop:12}}>
+        <div className="card-head"><strong>Wins Leaderboard</strong><span className="meta"> (game-only winners)</span></div>
+        {stats.wins.length===0 ? (
+          <div className="meta">No games yet.</div>
+        ) : (
+          <div className="bars">
+            {(() => {
+              const max = Math.max(...stats.wins.map(x=>x.wins));
+              return stats.wins.map(x=>{
+                const w = max>0 ? (x.wins/max)*100 : 0;
+                return (
+                  <div key={x.name} className="bar-row">
+                    <div className="bar-label">{x.name}</div>
+                    <div className="bar-track"><div className="bar-fill" style={{width:`${w}%`}} /></div>
+                    <div className="bar-value mono">{x.wins.toFixed(2)}</div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* Cumulative Wins (Top 3) */}
+      <div className="card" style={{marginTop:12}}>
+        <div className="card-head"><strong>Cumulative Wins Over Time</strong><span className="meta"> (top 3 players)</span></div>
+        {stats.games.length===0 ? (
+          <div className="meta">No games to chart.</div>
+        ) : (
+          <div className="svg-wrap">
+            {(() => {
+              const W=640, H=200, P=28;
+              // pick top 3 by total wins
+              const top3 = stats.wins.slice(0,3).map(x=>x.name);
+              const nG = stats.games.length;
+              const maxY = Math.max(1, ...top3.map(n => (stats.cumulative[n]?.[nG-1] || 0)));
+              const xs = (i)=> P + (nG<=1 ? 0 : (i*(W-2*P)/(nG-1)));
+              const ys = (v)=> H-P - (maxY>0 ? (v*(H-2*P)/maxY) : 0);
+
+              const lines = top3.map((name, idx)=>{
+                const arr = stats.cumulative[name] || [];
+                const pts = arr.map((v,i)=> [xs(i), ys(v)]);
+                return <path key={name} d={toPath(pts)} fill="none" stroke={palette[idx%palette.length]} strokeWidth="2" />;
+              });
+
+              const xAxis = <line x1={P} y1={H-P} x2={W-P} y2={H-P} stroke="#999" />;
+              const yAxis = <line x1={P} y1={P} x2={P} y2={H-P} stroke="#999" />;
+              const yTicks = [];
+              for(let t=0;t<=Math.ceil(maxY);t++){
+                const y=ys(t);
+                yTicks.push(<g key={t}><line x1={P-4} y1={y} x2={P} y2={y} stroke="#aaa"/><text x={6} y={y+4} fontSize="10" fill="#888">{t}</text></g>);
+              }
+              const xLabels = stats.dates.map((d,i)=>{
+                const x=xs(i);
+                const label = d.toLocaleDateString();
+                return <text key={i} x={x} y={H-6} fontSize="9" fill="#888" textAnchor="middle">{label}</text>;
+              });
+
+              const legend = top3.map((n,i)=>(
+                <div key={n} className="legend-item">
+                  <span className="legend-swatch" style={{background:palette[i%palette.length]}} />
+                  <span className="legend-name">{n}</span>
+                </div>
+              ));
+
+              return (
+                <>
+                  <svg viewBox={`0 0 ${W} ${H}`} className="chart">
+                    {xAxis}{yAxis}{yTicks}
+                    {lines}
+                    {xLabels}
+                  </svg>
+                  <div className="legend">{legend}</div>
+                </>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const ProfilesSection = (
     <div className="surface">
       <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
@@ -637,7 +833,7 @@ export default function App(){
           <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
         </div>
         <div className="nav-list">
-          {["game","history","ledgers","profiles"].map(k=>(
+          {["game","history","ledgers","stats","profiles"].map(k=>(
             <div key={k} className={"nav-item " + (tab===k?'active':'')} onClick={()=>{setTab(k); setSidebarOpen(false);}}>
               <span style={{textTransform:'capitalize'}}>{k}</span>
               <span>›</span>
@@ -651,6 +847,7 @@ export default function App(){
         {tab==="game" && GameSection}
         {tab==="history" && HistorySection}
         {tab==="ledgers" && LedgersSection}
+        {tab==="stats" && StatsSection}
         {tab==="profiles" && ProfilesSection}
 
         {/* Bottom tabbar for quick nav on mobile */}
@@ -658,6 +855,7 @@ export default function App(){
           <button className={"btn " + (tab==='game'?'primary':'secondary')} onClick={()=>setTab('game')}>Game</button>
           <button className={"btn " + (tab==='history'?'primary':'secondary')} onClick={()=>setTab('history')}>History</button>
           <button className={"btn " + (tab==='ledgers'?'primary':'secondary')} onClick={()=>setTab('ledgers')}>Ledgers</button>
+          <button className={"btn " + (tab==='stats'?'primary':'secondary')} onClick={()=>setTab('stats')}>Stats</button>
           <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
         </div>
 
