@@ -1,3 +1,5 @@
+// Phase 1: Add Equal-split per-loser settlement mode (keeps legacy proportional as default).
+// Drop-in replacement for src/App.jsx (compatible with compact mobile tabs + drawer).
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
@@ -6,6 +8,27 @@ const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).s
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
+
+// NEW: equal-split settlement (per-loser split evenly across all winners)
+function settleEqualSplit(rows){
+  const winners = rows.filter(r=> r.net > 0.0001).map(r=>({name:r.name, net: round2(r.net)}));
+  const losers  = rows.filter(r=> r.net < -0.0001).map(r=>({name:r.name, net: round2(r.net)}));
+  const txns = [];
+  if (winners.length===0 || losers.length===0) return txns;
+
+  losers.forEach(L=>{
+    let remaining = round2(-L.net); // positive amount the loser must pay
+    const per = round2(remaining / winners.length);
+    winners.forEach((W, idx)=>{
+      const isLast = idx === winners.length - 1;
+      const amount = isLast ? round2(remaining - per*(winners.length-1)) : per;
+      if (amount > 0.0001) {
+        txns.push({ from: L.name || "Player", to: W.name || "Player", amount: round2(amount) });
+      }
+    });
+  });
+  return txns;
+}
 
 function useCountdownToFriday(){
   const [now,setNow]=useState(Date.now());
@@ -36,15 +59,20 @@ export default function App(){
   const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
   useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
 
+  // NEW: settlement mode (defaults to legacy proportional)
+  const [settlementMode, setSettlementMode] = useState("proportional");
+
   useEffect(()=>{ const s=load();
     if(s){ setPlayers(s.players?.length?s.players:[blank(),blank()]);
       setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
       setApplyPerHead(!!s.applyPerHead);
       setPerHeadAmount(s.perHeadAmount ?? DEFAULT_PERHEAD);
-      setHistory(s.history ?? []); setStarted(!!s.started); }
+      setHistory(s.history ?? []); setStarted(!!s.started);
+      if (s.settlementMode) setSettlementMode(s.settlementMode);
+    }
   },[]);
-  useEffect(()=>{ save({players,buyInAmount,applyPerHead,perHeadAmount,history,started}) },
-    [players,buyInAmount,applyPerHead,perHeadAmount,history,started]);
+  useEffect(()=>{ save({players,buyInAmount,applyPerHead,perHeadAmount,history,started,settlementMode}) },
+    [players,buyInAmount,applyPerHead,perHeadAmount,history,started,settlementMode]);
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
     localStorage.setItem(THEME, theme);
@@ -81,12 +109,18 @@ export default function App(){
     const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
     const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
-    const txns = settle(adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj })));
+
+    // NEW: choose settlement algorithm
+    const basis = adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj }));
+    const txns = settlementMode === "equalSplit"
+      ? settleEqualSplit(basis)
+      : settle(basis); // legacy proportional
+
     const sorted = [...adjusted].sort((a,b)=>b.net-a.net);
     const winner = sorted.length ? sorted[0] : null;
     const perHeadPayers = winner ? adjusted.filter(p=>p.id!==winner.id).map(p=>p.name||"Player") : [];
     return { adjusted, top, buyInSum, cashAdjSum, diff, txns, winner, perHeadPayers };
-  }, [players, buyInAmount, applyPerHead, perHeadAmount]);
+  }, [players, buyInAmount, applyPerHead, perHeadAmount, settlementMode]);
 
   function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
   const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
@@ -99,7 +133,11 @@ export default function App(){
     const perHeadPayments = {};
     totals.perHeadPayers.forEach(n=> perHeadPayments[n] = { paid:false, method:null, paidAt:null });
     const g={ id:uid(), stamp,
-      settings:{buyInAmount, perHead: applyPerHead ? perHeadAmount : 0},
+      settings:{
+        buyInAmount,
+        perHead: applyPerHead ? perHeadAmount : 0,
+        settlement: { mode: settlementMode } // NEW: persist settlement mode in game
+      },
       players: totals.adjusted.map(p=>({name:p.name||"Player",buyIns:p.buyIns,buyInTotal:p.buyInTotal,cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj})),
       totals:{buyIns:totals.buyInSum,cashOuts:totals.cashAdjSum,diff:totals.diff},
       txns: totals.txns,
@@ -291,6 +329,16 @@ export default function App(){
           <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
           <span className="meta">from each other player</span>
         </div>
+        {/* NEW: Settlement mode selector */}
+        <div className="toggles toolbar" style={{marginTop:8}}>
+          <label className="inline">
+            Settlement
+            <select value={settlementMode} onChange={e=>setSettlementMode(e.target.value)}>
+              <option value="proportional">Proportional (legacy)</option>
+              <option value="equalSplit">Equal-split per loser</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       <hr className="hair" />
@@ -449,7 +497,7 @@ export default function App(){
                         )}
 
                         <div style={{height:8}} />
-                        <strong>Transfers for settlement</strong>
+                        <strong>Transfers for settlement</strong> <span className="meta">Mode: {g.settings?.settlement?.mode === 'equalSplit' ? 'Equal-split per loser' : 'Proportional (legacy)'}</span>
                         <table className="table">
                           <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
                           <tbody>
