@@ -1,4 +1,4 @@
-// Phase 1: Add Equal-split per-loser settlement mode (keeps legacy proportional as default).
+// Phase 1: Equal-split per-loser (with cap & redistribute). Keeps legacy proportional as default.
 // Drop-in replacement for src/App.jsx (compatible with compact mobile tabs + drawer).
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
@@ -9,24 +9,47 @@ const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state",
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
-// NEW: equal-split settlement (per-loser split evenly across all winners)
-function settleEqualSplit(rows){
-  const winners = rows.filter(r=> r.net > 0.0001).map(r=>({name:r.name, net: round2(r.net)}));
-  const losers  = rows.filter(r=> r.net < -0.0001).map(r=>({name:r.name, net: round2(r.net)}));
+// NEW: equal-split per-loser with cap & redistribute to respect winners' remaining needs.
+// rows = [{ name, net }], where net >0 winners, net <0 losers. All values in dollars.
+function settleEqualSplitCapped(rows){
+  const winnersBase = rows.filter(r=> r.net > 0.0001).map(r=>({ name: r.name || "Player", need: round2(r.net) }));
+  const losersBase  = rows.filter(r=> r.net < -0.0001).map(r=>({ name: r.name || "Player", loss: round2(-r.net) }));
   const txns = [];
-  if (winners.length===0 || losers.length===0) return txns;
+  if (!winnersBase.length || !losersBase.length) return txns;
 
-  losers.forEach(L=>{
-    let remaining = round2(-L.net); // positive amount the loser must pay
-    const per = round2(remaining / winners.length);
-    winners.forEach((W, idx)=>{
-      const isLast = idx === winners.length - 1;
-      const amount = isLast ? round2(remaining - per*(winners.length-1)) : per;
-      if (amount > 0.0001) {
-        txns.push({ from: L.name || "Player", to: W.name || "Player", amount: round2(amount) });
+  // For deterministic output
+  const winnersOrder = [...winnersBase]; // keep insertion order
+  const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
+
+  losersBase.forEach(L => {
+    let remaining = round2(L.loss);
+    while (remaining > 0.0001) {
+      const eligible = getEligible();
+      if (!eligible.length) break; // nothing more to pay (should not happen if nets balance)
+
+      // Split equally across eligible winners
+      const equalRaw = remaining / eligible.length;
+      // We'll allocate to all but the last, rounding each to cents, and give the last the remainder to keep exact.
+      let distributed = 0;
+      for (let i = 0; i < eligible.length; i++) {
+        const w = eligible[i];
+        const isLast = i === eligible.length - 1;
+        const shareTarget = Math.min(equalRaw, w.need); // cap at remaining need
+        let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
+        // Guard against floating artefacts and over-giving due to rounding
+        give = Math.min(give, round2(w.need), round2(remaining - distributed));
+        if (give > 0.0001) {
+          txns.push({ from: L.name, to: w.name, amount: round2(give) });
+          w.need = round2(w.need - give);
+          distributed = round2(distributed + give);
+        }
       }
-    });
+      remaining = round2(remaining - distributed);
+      // If we couldn't distribute anything (e.g., all needs ~0 due to rounding), break to avoid infinite loop.
+      if (distributed <= 0.0001) break;
+    }
   });
+
   return txns;
 }
 
@@ -93,6 +116,7 @@ export default function App(){
     const top=[...withNet].sort((a,b)=>b.net-a.net)[0];
     let adjusted=withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
+    // Keep existing per-head (legacy) behavior as-is
     if (applyPerHead && top) {
       const heads = Math.max(0, players.length - 1);
       adjusted = withNet.map(p=>{
@@ -113,7 +137,7 @@ export default function App(){
     // NEW: choose settlement algorithm
     const basis = adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj }));
     const txns = settlementMode === "equalSplit"
-      ? settleEqualSplit(basis)
+      ? settleEqualSplitCapped(basis)
       : settle(basis); // legacy proportional
 
     const sorted = [...adjusted].sort((a,b)=>b.net-a.net);
@@ -136,7 +160,7 @@ export default function App(){
       settings:{
         buyInAmount,
         perHead: applyPerHead ? perHeadAmount : 0,
-        settlement: { mode: settlementMode } // NEW: persist settlement mode in game
+        settlement: { mode: settlementMode } // NEW: persist mode
       },
       players: totals.adjusted.map(p=>({name:p.name||"Player",buyIns:p.buyIns,buyInTotal:p.buyInTotal,cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj})),
       totals:{buyIns:totals.buyInSum,cashOuts:totals.cashAdjSum,diff:totals.diff},
@@ -546,22 +570,23 @@ export default function App(){
                   <tr>
                     <td colSpan="3">
                       <div className="detail">
-                        
-                          {(() => {
-                            const sum = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
-                            const oweYou = sum(info.owedBy);
-                            const youOwe = sum(info.owes);
-                            return (
-                              <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
-                                {oweYou > 0 && (
-                                  <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
-                                )}
-                                {youOwe > 0 && (
-                                  <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
-                                )}
-                              </div>
-                            );
-                          })()}<table className="table">
+                        {/* Badges for total owe/owed (mobile-friendly) */}
+                        {(() => {
+                          const sumAmt = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
+                          const oweYou = sumAmt(info.owedBy);
+                          const youOwe = sumAmt(info.owes);
+                          return (
+                            <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
+                              {oweYou > 0 && (
+                                <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
+                              )}
+                              {youOwe > 0 && (
+                                <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        <table className="table">
                           <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
                           <tbody>
                             <tr>
