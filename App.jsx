@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
+import { aud, sum, round2, settle, toCSV } from "./lib/calc.js"; // stop importing nextFridayISO and compute 8:30pm locally
 
 // --- Cloud sync (Upstash via Vercel API) ---
 const API_BASE = ""; // same origin
@@ -11,10 +11,29 @@ const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state",
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
-function useCountdownToFriday(){
+// Compute next Friday 8:30 PM local time (Brisbane is UTC+10, no DST).
+function nextFriday830ISO(fromISO){
+  const base = fromISO ? new Date(fromISO) : new Date();
+  const d = new Date(base);
+  // set to 20:30:00 local
+  d.setSeconds(0,0);
+  const day = d.getDay(); // 0=Sun ... 5=Fri
+  const daysUntilFriday = (5 - day + 7) % 7 || (d.getHours() > 20 || (d.getHours()===20 && d.getMinutes()>30) ? 7 : 0);
+  // jump to Friday of this/next week
+  const target = new Date(d);
+  target.setDate(d.getDate() + daysUntilFriday);
+  target.setHours(20,30,0,0);
+  // if today is Friday but time passed, push a week
+  if(day === 5 && (d.getHours() > 20 || (d.getHours()===20 && d.getMinutes() >= 30))){
+    target.setDate(target.getDate()+7);
+  }
+  return target.toISOString();
+}
+
+function useCountdownToFriday830(){
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
-  const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
+  const due = new Date(nextFriday830ISO()); const diff = Math.max(0, due.getTime()-now);
   const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
   const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
   return { due, days, hrs, mins, secs };
@@ -39,6 +58,9 @@ export default function App(){
 
   // --- Host Lock state ---
   const [hostLock,setHostLock] = useState({ active:false, by:null, until:null, at:null }); // source of truth is server
+  const [lockDialogOpen,setLockDialogOpen]=useState(false);
+  const playerNames = useMemo(()=> Array.from(new Set((players||[]).map(p=>(p.name||"").trim()).filter(Boolean))), [players]);
+  const [selectedLocker,setSelectedLocker]=useState("");
 
   // ---- Cloud API helpers ----
   async function apiGetSeason(){
@@ -92,14 +114,7 @@ export default function App(){
       return await res.json();
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
   }
-  async function apiLockSeason(locked){
-    // Ask who is locking to display "Locked by ..."
-    let by = null;
-    if (locked){
-      by = window.prompt("Who is activating Host Lock? Enter player name:");
-      if(!by || !by.trim()) return; // cancelled
-      by = by.trim();
-    }
+  async function apiLockSeason(locked, by){
     const res = await fetch(`${API_BASE}/api/season/lock`, {
       method: "POST",
       headers: { "Content-Type":"application/json" },
@@ -165,7 +180,7 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
-  const {due,days,hrs,mins,secs} = useCountdownToFriday();
+  const {due,days,hrs,mins,secs} = useCountdownToFriday830();
 
   // Load season from cloud on mount & set up polling
   useEffect(()=>{
@@ -233,7 +248,7 @@ export default function App(){
 
   async function saveGameToHistory(){
     const stamp = new Date().toISOString();
-    const perHeadDue = nextFridayISO(stamp);
+    const perHeadDue = nextFriday830ISO(stamp);
     const perHeadPayments = {};
     totals.perHeadPayers.forEach(n=> perHeadPayments[n] = { paid:false, method:null, paidAt:null });
     const g={ id:uid(), stamp,
@@ -740,6 +755,30 @@ export default function App(){
     </Section>
   );
 
+  // Locker picker modal
+  const LockDialog = () => {
+    if(!lockDialogOpen) return null;
+    return (
+      <div className="pp-modal">
+        <div className="pp-modal-card">
+          <div className="pp-modal-title">Activate Host Lock</div>
+          <div className="pp-modal-body">
+            <label>Locker</label>
+            <select value={selectedLocker} onChange={e=>setSelectedLocker(e.target.value)}>
+              <option value="" disabled>Choose a player</option>
+              {playerNames.map(n=> <option key={n} value={n}>{n}</option>)}
+            </select>
+            {playerNames.length===0 && <div className="meta" style={{marginTop:6}}>Add player names first.</div>}
+          </div>
+          <div className="pp-modal-actions">
+            <button className="btn secondary" onClick={()=>setLockDialogOpen(false)}>Cancel</button>
+            <button className="btn primary" disabled={!selectedLocker} onClick={()=>{ setLockDialogOpen(false); apiLockSeason(true, selectedLocker); }}>Lock</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <>
       {/* Topbar */}
@@ -755,9 +794,15 @@ export default function App(){
         </div>
         <div className="pp-hide-mobile">
           <div className="toolbar">
-            <button className="btn secondary" onClick={()=>apiLockSeason(!hostLock.active)}>
-              {hostLock.active ? "Unlock (Host)" : "Activate Host Lock"}
-            </button>
+            {!hostLock.active ? (
+              <button className="btn secondary" onClick={()=>{ setSelectedLocker(playerNames[0]||""); setLockDialogOpen(true); }}>
+                Activate Host Lock
+              </button>
+            ) : (
+              <button className="btn secondary" onClick={()=>apiLockSeason(false, hostLock.by)}>
+                Unlock (Host)
+              </button>
+            )}
             <div className="switch">
               <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
               <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
@@ -777,9 +822,15 @@ export default function App(){
           <button className="pp-burger" onClick={()=>setSidebarOpen(false)}>✕</button>
         </div>
         <div style={{height:8}} />
-        <button className="btn secondary" onClick={()=>apiLockSeason(!hostLock.active)} style={{width:'100%'}}>
-          {hostLock.active ? "Unlock (Host)" : "Activate Host Lock"}
-        </button>
+        {!hostLock.active ? (
+          <button className="btn secondary" onClick={()=>{ setSelectedLocker(playerNames[0]||""); setLockDialogOpen(true); }} style={{width:'100%'}}>
+            Activate Host Lock
+          </button>
+        ) : (
+          <button className="btn secondary" onClick={()=>apiLockSeason(false, hostLock.by)} style={{width:'100%'}}>
+            Unlock (Host)
+          </button>
+        )}
         <div style={{height:8}} />
         <div className="switch">
           <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
@@ -801,12 +852,15 @@ export default function App(){
       </div>
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
-      <div className="container">
-        <div className="kicker">
-          Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙
+      {/* Kicker visible on all viewports */}
+      <div className="surface kicker-card">
+        <div className="kicker-line">
+          Every Friday <strong>8:30 PM</strong> — next in <strong>{days}d {hrs}h {mins}m {secs}s</strong>.
           {hostLock.active && <span className="badge" style={{marginLeft:8}}>🔒 Locked{hostLock.by?` by ${hostLock.by}`:''}</span>}
         </div>
+      </div>
 
+      <div className="container">
         {/* Alerts visible on Game & History tabs */}
         {(tab==="game" || tab==="history") && alerts.length>0 && (
           <div className="surface" style={{marginTop:14}}>
@@ -835,12 +889,23 @@ export default function App(){
         <div className="footer meta">Tip: Host Lock makes all devices read-only until unlocked (or next day, Brisbane, on refresh).</div>
       </div>
 
-      {/* lightweight CSS for the read-only overlay */}
+      <LockDialog />
+
+      {/* lightweight CSS for read-only overlay + modal + kicker visibility */}
       <style>{`
         .pp-guard{position:relative}
         .pp-ro{position:absolute;inset:0;background:transparent;pointer-events:auto}
         .pp-ro::after{content:'';position:absolute;inset:0;border-radius:18px;background:rgba(0,0,0,.12)}
         .pp-ro-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.65);color:#fff;padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.15);font-size:12px}
+        .kicker-card{margin:12px auto 0; max-width:1100px; padding:10px 14px;}
+        .kicker-line{font-size:14px; line-height:1.4}
+        @media(min-width:768px){ .kicker-line{font-size:16px} }
+        /* Modal */
+        .pp-modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.4); z-index:5000}
+        .pp-modal-card{background:var(--surface,#1f2937); border-radius:16px; padding:16px; width:min(92vw,420px); box-shadow:0 10px 30px rgba(0,0,0,.3)}
+        .pp-modal-title{font-weight:700; margin-bottom:8px}
+        .pp-modal-body select{width:100%; padding:8px; border-radius:10px}
+        .pp-modal-actions{display:flex; gap:8px; justify-content:flex-end; margin-top:12px}
       `}</style>
     </>
   );
