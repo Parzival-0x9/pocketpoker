@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from "react";
-import PlayerRow from "./PlayerRow.jsx";
-import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./calc.js";
+import PlayerRow from "./components/PlayerRow.jsx";
+import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
 
 // ===============================
 // 2B Host Lock — minimal, safe, no layout changes
