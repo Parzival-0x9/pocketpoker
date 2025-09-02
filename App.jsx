@@ -157,6 +157,39 @@ export default function App(){
     if (doc) hydrateFromDoc(doc);
     else setHostLock(s=>({ ...s, active: locked, by: locked ? (byName||s.by) : null }));
   }
+  // Force unlock (for admins / emergencies). Server must allow unconditional unlock.
+  async function forceUnlock(){
+    try{
+      const deviceId = getDeviceId();
+      const res = await fetch(`${API_BASE}/api/season/lock`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-client-id": deviceId,
+          "x-client-name": whoAmI || hostLock.by || "Unknown",
+        },
+        body: JSON.stringify({
+          seasonId: SEASON_ID,
+          action: "unlock",
+          deviceId,
+          force: true
+        }),
+      });
+      const body = await res.text();
+      let doc = null;
+      try { doc = JSON.parse(body); } catch {}
+      if(!res.ok){
+        alert((doc && (doc.error || doc.message)) || body || "Failed to clear Host Lock");
+        if (doc) hydrateFromDoc(doc);
+        return;
+      }
+      if (doc) hydrateFromDoc(doc);
+      alert("Host Lock cleared (server permitted).");
+    }catch(e){
+      alert(e?.message || "Failed to clear Host Lock");
+    }
+  }
+
 
   // Merge server doc into local UI state
   function hydrateFromDoc(doc){
@@ -793,6 +826,7 @@ export default function App(){
           <span className="meta" style={{marginLeft:8}}>
             <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
             <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
+            <button className="btn ghost small" style={{marginLeft:8}} onClick={forceUnlock}>Force Unlock</button>
           </span>
         </div>
         <div className="pp-hide-mobile">
