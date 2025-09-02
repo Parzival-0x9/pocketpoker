@@ -1,758 +1,610 @@
-import React, { useMemo, useState, useEffect } from "react";
-import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
-// --- Cloud sync (Upstash via Vercel API) ---
-const API_BASE = ""; // same origin
-const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
-const PIN_KEY = "pp_season_key"; // reserved for future PIN gate
 
+import React, { useEffect, useMemo, useState } from "react";
 
-const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
-const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
-const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
-const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
+/**
+ * PocketPoker App.jsx — Tabbed UI + Enhancements
+ * Tabs: Game | History | Profiles
+ * Enhancements:
+ *  - Equal-split settlement (default, deterministic)
+ *  - Prize-from-pot (A$20 from initial buy-in)
+ *  - Cloud season storage (get/append/delete)
+ *  - Host lock (lock/unlock) + read-only overlay
+ *  - Per-transfer "Paid?" toggle; winners chips show received/needed
+ *  - Profiles (PayID + avatar) used in History + Transfers
+ *  - CSV exports
+ *  - Sync status header + manual refresh
+ *  - Validation before save; override mismatch option
+ */
 
-function useCountdownToFriday(){
-  const [now,setNow]=useState(Date.now());
-  useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
-  const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
-  const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
-  const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
-  return { due, days, hrs, mins, secs };
+// ===== Small utils =====
+const uid = () => Math.random().toString(36).slice(2, 9);
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const sum = (arr) => arr.reduce((a, b) => a + (Number(b) || 0), 0);
+const aud = (v) => `A$${Number(v || 0).toFixed(2)}`;
+
+// ===== CSV helper =====
+function downloadCSV(filename, rows) {
+  const csv = rows
+    .map(r => r.map(v => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
+// ===== Settlement: equal-split per loser (with per-winner cap) =====
+function settleEqualSplitCapped(rows) {
+  const winnersBase = rows.filter(r => r.net > 0.0001).map(r => ({ name: (r.name || "Player"), need: round2(r.net) }));
+  const losersBase  = rows.filter(r => r.net < -0.0001).map(r => ({ name: (r.name || "Player"), loss: round2(-r.net) }));
+  const txns = [];
+  if (!winnersBase.length || !losersBase.length) return txns;
+
+  // Deterministic order: winners alphabetical; losers by larger loss first then alpha
+  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name));
+  const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name));
+
+  const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
+
+  losersSorted.forEach(L => {
+    let remaining = round2(L.loss);
+    while (remaining > 0.0001) {
+      const eligible = getEligible();
+      if (!eligible.length) break;
+      const equalRaw = remaining / eligible.length;
+      let distributed = 0;
+      for (let i = 0; i < eligible.length; i++) {
+        const w = eligible[i];
+        const isLast = i === eligible.length - 1;
+        const shareTarget = Math.min(equalRaw, w.need);
+        let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
+        give = Math.min(give, round2(w.need), round2(remaining - distributed));
+        if (give > 0.0001) {
+          txns.push({ from: L.name, to: w.name, amount: round2(give), paid:false, paidAt:null });
+          w.need = round2(w.need - give);
+          distributed = round2(distributed + give);
+        }
+      }
+      remaining = round2(remaining - distributed);
+      if (distributed <= 0.0001) break;
+    }
+  });
+
+  return txns;
+}
+
+// ===== Prize-from-pot application =====
+function applyPrizeFromPot(base, buyInAmount, prizeAmount) {
+  const withNet = base.map(p => ({ ...p, net: round2(p.baseCash - p.buyIns*buyInAmount) }));
+  const N = withNet.length;
+  if (N < 2) return withNet.map(p => ({
+    ...p, prize: 0, cashOutAdj: round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)
+  }));
+
+  const topNet = Math.max(...withNet.map(p => p.net));
+  const winners = withNet.filter(p => Math.abs(p.net - topNet) < 0.0001);
+  const T = winners.length;
+  const pool = round2(Number(prizeAmount || 0) * N);
+  const perWinner = T>0 ? round2(pool / T) : 0;
+
+  // Everyone contributes prizeAmount
+  let adjusted = withNet.map(p => {
+    const cash = round2(p.baseCash - prizeAmount);
+    return { ...p, prize: round2(-prizeAmount), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount) };
+  });
+
+  // Give pool to top winner(s)
+  let distributed = 0, idx = 0;
+  const winnersSet = new Set(winners.map(w => w.name));
+  adjusted = adjusted.map(p => {
+    if (!winnersSet.has(p.name)) return p;
+    const isLast = (++idx) === T;
+    const give = isLast ? round2(pool - distributed) : perWinner;
+    distributed = round2(distributed + give);
+    const cash = round2(p.cashOutAdj + give);
+    return { ...p, prize: round2(p.prize + give), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount) };
+  });
+  return adjusted;
+}
+
+// ===== Cloud constants & identity =====
+const API_BASE = ""; // same-origin
+const SEASON_ID = (import.meta?.env?.VITE_SEASON_ID) || "default";
+const DEVICE_ID_KEY = "pp_device_id";
+const DEVICE_NAME_KEY = "pp_device_name";
+function ensureDeviceId(){
+  let id = localStorage.getItem(DEVICE_ID_KEY);
+  if (!id) { id = (crypto.randomUUID?.() || uid()); localStorage.setItem(DEVICE_ID_KEY, id); }
+  return id;
+}
+function getDeviceName(){ return localStorage.getItem(DEVICE_NAME_KEY) || ""; }
+function setDeviceNameLS(n){ localStorage.setItem(DEVICE_NAME_KEY, n || ""); }
+
+// ===== Cloud API helpers =====
+async function apiGetSeason(){
+  const res = await fetch(`${API_BASE}/api/season/get?id=${encodeURIComponent(SEASON_ID)}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+async function apiAppendGame(game, version, deviceId, deviceName){
+  const headers = { "Content-Type":"application/json", "If-Match": String(version), "X-Client-Id": deviceId, "X-Client-Name": deviceName || "Unknown" };
+  let res = await fetch(`${API_BASE}/api/season/append-game`, { method:"POST", headers, body: JSON.stringify({ seasonId: SEASON_ID, game }) });
+  if (res.status === 409) {
+    const latest = await apiGetSeason();
+    res = await fetch(`${API_BASE}/api/season/append-game`, { method:"POST", headers:{...headers,"If-Match":String(latest.version||0)}, body: JSON.stringify({ seasonId: SEASON_ID, game }) });
+  }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+async function apiDeleteGame(gameId, version, deviceId, deviceName){
+  const headers = { "Content-Type":"application/json", "If-Match": String(version), "X-Client-Id": deviceId, "X-Client-Name": deviceName || "Unknown" };
+  let res = await fetch(`${API_BASE}/api/season/delete-game`, { method:"POST", headers, body: JSON.stringify({ seasonId: SEASON_ID, gameId }) });
+  if (res.status === 409) {
+    const latest = await apiGetSeason();
+    res = await fetch(`${API_BASE}/api/season/delete-game`, { method:"POST", headers:{...headers,"If-Match":String(latest.version||0)}, body: JSON.stringify({ seasonId: SEASON_ID, gameId }) });
+  }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+async function apiLock(action, byName, deviceId){
+  const headers = { "Content-Type":"application/json", "X-Client-Id": deviceId, "X-Client-Name": byName || "Unknown" };
+  const res = await fetch(`${API_BASE}/api/season/lock`, { method:"POST", headers, body: JSON.stringify({ seasonId: SEASON_ID, action, byName, deviceId }) });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+async function apiMarkPayment(gameId, idx, paid, deviceId, deviceName){
+  const headers = { "Content-Type":"application/json", "X-Client-Id": deviceId, "X-Client-Name": deviceName || "Unknown" };
+  const res = await fetch(`${API_BASE}/api/season/mark-payment`, { method:"POST", headers, body: JSON.stringify({ seasonId: SEASON_ID, gameId, idx, paid }) });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+async function apiProfileUpsert(name, fields, deviceId, deviceName){
+  const headers = { "Content-Type":"application/json", "X-Client-Id": deviceId, "X-Client-Name": deviceName || "Unknown" };
+  const res = await fetch(`${API_BASE}/api/season/profile-upsert`, { method:"POST", headers, body: JSON.stringify({ seasonId: SEASON_ID, name, ...fields }) });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ===== Main App =====
 export default function App(){
-  const [players,setPlayers]=useState([blank(),blank()]);
-  const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
-  const [applyPerHead,setApplyPerHead]=useState(false);
-  const [perHeadAmount,setPerHeadAmount]=useState(DEFAULT_PERHEAD);
-  const [history,setHistory]=useState([]);
-  const [cloudVersion,setCloudVersion]=useState(0);
-  const [syncStatus,setSyncStatus]=useState("idle");
-  const [started,setStarted]=useState(false);
-  const [overrideMismatch,setOverrideMismatch]=useState(false);
-  const [theme,setTheme]=useState(()=>localStorage.getItem(THEME) || "dark");
-  const [felt,setFelt]=useState(()=>localStorage.getItem(FELT) || "emerald");
-  const [expanded,setExpanded]=useState({});
-  const [ledgerExpanded,setLedgerExpanded]=useState({});
-  const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
-  const [celebrated, setCelebrated] = useState(new Set());
+  // Tabs
+  const [tab, setTab] = useState("game"); // game | history | profiles
 
-  
-  // ---- Cloud API helpers ----
-  async function apiGetSeason(){
-    try{
-      const res = await fetch(`${API_BASE}/api/season/get?id=${encodeURIComponent(SEASON_ID)}`);
-      if(!res.ok) throw new Error(await res.text());
-      return await res.json();
-    }catch(e){ console.error("apiGetSeason", e); throw e; }
-  }
-  async function apiAppendGame(game){
-    try{
-      const res = await fetch(`${API_BASE}/api/season/append-game`, {
-        method: "POST",
-        headers: { "Content-Type":"application/json", "If-Match": String(cloudVersion) },
-        body: JSON.stringify({ seasonId: SEASON_ID, game })
-      });
-      if(res.status===409){
-        // fetch latest and retry once
-        const doc = await apiGetSeason();
-        setHistory(doc.games||[]); setCloudVersion(doc.version||0);
-        const res2 = await fetch(`${API_BASE}/api/season/append-game`, {
-          method: "POST",
-          headers: { "Content-Type":"application/json", "If-Match": String(doc.version||0) },
-          body: JSON.stringify({ seasonId: SEASON_ID, game })
-        });
-        if(!res2.ok) throw new Error(await res2.text());
-        return await res2.json();
-      }
-      if(!res.ok) throw new Error(await res.text());
-      return await res.json();
-    }catch(e){ console.error("apiAppendGame", e); throw e; }
-  }
-  async function apiDeleteGame(gameId){
-    try{
-      const res = await fetch(`${API_BASE}/api/season/delete-game`, {
-        method: "POST",
-        headers: { "Content-Type":"application/json", "If-Match": String(cloudVersion) },
-        body: JSON.stringify({ seasonId: SEASON_ID, gameId })
-      });
-      if(res.status===409){
-        const doc = await apiGetSeason();
-        setHistory(doc.games||[]); setCloudVersion(doc.version||0);
-        const res2 = await fetch(`${API_BASE}/api/season/delete-game`, {
-          method: "POST",
-          headers: { "Content-Type":"application/json", "If-Match": String(doc.version||0) },
-          body: JSON.stringify({ seasonId: SEASON_ID, gameId })
-        });
-        if(!res2.ok) throw new Error(await res2.text());
-        return await res2.json();
-      }
-      if(!res.ok) throw new Error(await res.text());
-      return await res.json();
-    }catch(e){ console.error("apiDeleteGame", e); throw e; }
-  }
+  // Game inputs
+  const [players, setPlayers] = useState([
+    { id: uid(), name: "", buyIns: 0, cashOut: 0 },
+    { id: uid(), name: "", buyIns: 0, cashOut: 0 },
+  ]);
+  const [buyInAmount, setBuyInAmount] = useState(50);
+  const [prizeFromPot, setPrizeFromPot] = useState(true);
+  const [prizeAmount, setPrizeAmount] = useState(20);
+  const [settlementMode, setSettlementMode] = useState("equalSplit"); // default
+  const [overrideMismatch, setOverrideMismatch] = useState(false);
 
+  // Cloud state
+  const [history, setHistory] = useState([]);
+  const [cloudVersion, setCloudVersion] = useState(0);
+  const [syncStatus, setSyncStatus] = useState("idle");
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [lock, setLock] = useState(null); // { deviceId, byName, expiresAt }
+  const [profiles, setProfiles] = useState({}); // { name: { payId, avatarDataUrl } }
+  const [expanded, setExpanded] = useState({}); // gameId -> bool
 
-  // Compact mobile: tabs + drawer
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
-  useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
+  // Device identity
+  const deviceId = ensureDeviceId();
+  const [deviceName, setDeviceName] = useState(getDeviceName());
+  useEffect(() => { setDeviceNameLS(deviceName); }, [deviceName]);
 
-  useEffect(()=>{ const s=load();
-    if(s){ setPlayers(s.players?.length?s.players:[blank(),blank()]);
-      setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
-      setApplyPerHead(!!s.applyPerHead);
-      setPerHeadAmount(s.perHeadAmount ?? DEFAULT_PERHEAD);
-      setHistory(s.history ?? []); setStarted(!!s.started); }
-  },[]);
-  useEffect(()=>{ save({players,buyInAmount,applyPerHead,perHeadAmount,history,started}) },
-    [players,buyInAmount,applyPerHead,perHeadAmount,history,started]);
-  useEffect(()=>{
-    document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
-    localStorage.setItem(THEME, theme);
-  }, [theme]);
-  useEffect(()=>{
-    document.documentElement.setAttribute('data-felt', felt==='midnight'?'midnight':'emerald');
-    localStorage.setItem(FELT, felt);
-  }, [felt]);
-  useEffect(()=>{
-    localStorage.setItem(PROFILES, JSON.stringify(profiles));
-  }, [profiles]);
+  // Computations
+  const totals = useMemo(() => {
+    const base = (players || []).map(p => ({
+      id: p.id, name: p.name || "Player",
+      buyIns: Number(p.buyIns || 0),
+      cashOut: Number(p.cashOut || 0),
+      buyInTotal: round2((Number(p.buyIns || 0)) * (Number(buyInAmount || 0))),
+      baseCash: round2(Number(p.cashOut || 0))
+    }));
 
-  const {due,days,hrs,mins,secs} = useCountdownToFriday();
+    // Start with no prize adj
+    let adjusted = base.map(p => ({
+      name: p.name,
+      buyIns: p.buyIns,
+      buyInTotal: p.buyInTotal,
+      prize: 0,
+      cashOutAdj: p.baseCash,
+      netAdj: round2(p.baseCash - p.buyIns*buyInAmount)
+    }));
 
-  
-  // Load season from cloud on mount & set up polling
-  useEffect(()=>{
-    (async()=>{
-      try{
-        setSyncStatus("syncing");
-        const doc = await apiGetSeason();
-        if(Array.isArray(doc.games) && doc.games.length>0){
-          setHistory(doc.games);
-        }
-        setCloudVersion(doc.version||0);
-        setSyncStatus("upToDate");
-      }catch(e){ setSyncStatus("error"); }
-    })();
-  },[]);
-
-  useEffect(()=>{
-    const t = setInterval(async()=>{
-      try{
-        const doc = await apiGetSeason();
-        if((doc.version||0)!==cloudVersion){
-          setHistory(doc.games||[]);
-          setCloudVersion(doc.version||0);
-        }
-      }catch(e){ /* ignore transient errors */ }
-    }, 10000);
-    return ()=>clearInterval(t);
-  },[cloudVersion]);
-
-
-  const totals=useMemo(()=>{
-    const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
-    const withNet=base.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
-    const top=[...withNet].sort((a,b)=>b.net-a.net)[0];
-    let adjusted=withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
-
-    if (applyPerHead && top) {
-      const heads = Math.max(0, players.length - 1);
-      adjusted = withNet.map(p=>{
-        if (p.id === top.id) {
-          const cash = round2(p.baseCash + perHeadAmount * heads);
-          return { ...p, prize: perHeadAmount*heads, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount) };
-        } else {
-          const cash = round2(p.baseCash - perHeadAmount);
-          return { ...p, prize: -perHeadAmount, cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount) };
-        }
-      });
+    if (prizeFromPot) {
+      adjusted = applyPrizeFromPot(base, buyInAmount, prizeAmount);
     }
 
-    const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
-    const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
+    const buyInSum = round2(sum(adjusted.map(p => p.buyInTotal)));
+    const cashAdjSum = round2(sum(adjusted.map(p => p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
-    const txns = settle(adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj })));
-    const sorted = [...adjusted].sort((a,b)=>b.net-a.net);
-    const winner = sorted.length ? sorted[0] : null;
-    const perHeadPayers = winner ? adjusted.filter(p=>p.id!==winner.id).map(p=>p.name||"Player") : [];
-    return { adjusted, top, buyInSum, cashAdjSum, diff, txns, winner, perHeadPayers };
-  }, [players, buyInAmount, applyPerHead, perHeadAmount]);
 
-  function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
-  const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
-  const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setStarted(true); setOverrideMismatch(false); };
-  const resetGame=()=>{ setPlayers([blank(),blank()]); setStarted(false); setOverrideMismatch(false); };
+    // Settlement basis: After prize adjustment, remove prize component so losers don't overpay
+    const basis = adjusted.map(p => ({ name: p.name, net: round2(p.netAdj - p.prize) }));
+    const txns = settlementMode === "equalSplit" ? settleEqualSplitCapped(basis) : [];
 
-  async function saveGameToHistory(){
-    const stamp = new Date().toISOString();
-    const perHeadDue = nextFridayISO(stamp);
-    const perHeadPayments = {};
-    totals.perHeadPayers.forEach(n=> perHeadPayments[n] = { paid:false, method:null, paidAt:null });
-    const g={ id:uid(), stamp,
-      settings:{buyInAmount, perHead: applyPerHead ? perHeadAmount : 0},
-      players: totals.adjusted.map(p=>({name:p.name||"Player",buyIns:p.buyIns,buyInTotal:p.buyInTotal,cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj})),
-      totals:{buyIns:totals.buyInSum,cashOuts:totals.cashAdjSum,diff:totals.diff},
+    return { adjusted, buyInSum, cashAdjSum, diff, txns, prizePool: prizeFromPot ? round2(prizeAmount * adjusted.length) : 0 };
+  }, [players, buyInAmount, prizeFromPot, prizeAmount, settlementMode]);
+
+  // Locked by other?
+  const lockedByOther = !!(lock && lock.deviceId && lock.deviceId !== deviceId && (new Date(lock.expiresAt) > new Date()));
+
+  // Build payload
+  function buildGame(){
+    return {
+      id: uid(),
+      stamp: new Date().toISOString(),
+      settings: {
+        buyInAmount,
+        prize: prizeFromPot ? { mode: "pot_all", amount: prizeAmount } : { mode: "none", amount: 0 },
+        settlement: { mode: settlementMode }
+      },
+      players: totals.adjusted.map(p => ({
+        name: p.name || "Player",
+        buyIns: p.buyIns,
+        buyInTotal: p.buyInTotal,
+        cashOut: p.cashOutAdj,
+        prize: p.prize,
+        net: p.netAdj
+      })),
+      totals: { buyIns: totals.buyInSum, cashOuts: totals.cashAdjSum, diff: totals.diff },
       txns: totals.txns,
-      perHead: applyPerHead ? {
-        winner: totals.winner?.name || "Winner",
-        amount: perHeadAmount,
-        payers: totals.perHeadPayers,
-        due: perHeadDue,
-        payments: perHeadPayments,
-        celebrated:false
-      } : null
+      savedBy: { deviceId, deviceName: deviceName || "Unknown" },
+      overrideMismatch
     };
-    try{ const doc = await apiAppendGame(g); setHistory(doc.games||[]); setCloudVersion(doc.version||0); }
-    catch(e){ console.error(e); setHistory(h=>[g,...h]); }
   }
 
-  function autoBalance(){
-    const {top,diff}=totals; if(!top||Math.abs(diff)<0.01) return;
-    setPlayers(ps=>ps.map(p=>p.id===top.id?{...p,cashOut:round2(p.cashOut - diff)}:p));
+  // Validation
+  function validateBeforeSave(totalsObj){
+    const errs = [];
+    if ((players || []).length < 2) errs.push("At least two players.");
+    const any = players.some(p => (p.buyIns||0) > 0 || (p.cashOut||0) > 0);
+    if (!any) errs.push("No inputs entered.");
+    if (Math.abs(totalsObj?.diff || 0) > 0.01 && !overrideMismatch) errs.push("Totals not balanced. Tick override to force.");
+    return errs;
   }
 
-  function deleteGame(id){
-    if (window.confirm("Delete this game from history?")) {
-      (async()=>{
-        try{
-          const doc = await apiDeleteGame(id);
-          setHistory(doc.games||[]); setCloudVersion(doc.version||0);
-        }catch(e){
-          console.error(e);
-          setHistory(h=> h.filter(g=> g.id !== id)); // local fallback
+  // Actions
+  async function saveGame(){
+    const g = buildGame();
+    const errs = validateBeforeSave(g.totals);
+    if (errs.length) { alert("Cannot save:\n- " + errs.join("\n- ")); return; }
+    try{
+      const out = await apiAppendGame(g, cloudVersion, deviceId, deviceName);
+      setHistory(out.games || []); setCloudVersion(out.version || 0); setLock(out.lock || null); setProfiles(out.profiles || {});
+      setTab("history");
+    }catch(e){
+      console.error(e);
+      const msg = String(e.message||"").toLowerCase();
+      if (msg.includes("429")) return alert("Too many saves. Please wait a moment.");
+      if (msg.includes("locked")) return alert("Locked by host. Ask to unlock.");
+      alert("Save failed.");
+    }
+  }
+  async function removeGame(id){
+    if (!confirm("Delete this game?")) return;
+    try{
+      const out = await apiDeleteGame(id, cloudVersion, deviceId, deviceName);
+      setHistory(out.games || []); setCloudVersion(out.version || 0); setLock(out.lock || null);
+    }catch(e){ console.error(e); alert("Delete failed."); }
+  }
+  async function togglePaid(g, idx){
+    try{
+      const out = await apiMarkPayment(g.id, idx, !g.txns[idx].paid, deviceId, deviceName);
+      setHistory(out.games || []); setCloudVersion(out.version || 0);
+    }catch(e){ console.error(e); alert("Payment toggle failed."); }
+  }
+
+  // Load + poll
+  useEffect(() => { (async ()=>{
+    try{
+      setSyncStatus("syncing");
+      const doc = await apiGetSeason();
+      setHistory(doc.games || []); setCloudVersion(doc.version || 0); setLock(doc.lock || null); setProfiles(doc.profiles || {});
+      setSyncStatus("upToDate"); setLastSyncAt(new Date());
+    }catch(e){ console.error(e); setSyncStatus("error"); }
+  })(); }, []);
+
+  useEffect(() => {
+    let dead = false;
+    const tick = async () => {
+      try{
+        const doc = await apiGetSeason();
+        if ((doc.version || 0) !== cloudVersion) {
+          setHistory(doc.games || []); setCloudVersion(doc.version || 0); setLock(doc.lock || null); setProfiles(doc.profiles || {});
         }
-      })();
-    }
-  }
-  function clearHistory(){
-    if (window.confirm("Delete ALL saved games? This cannot be undone.")) {
-      setHistory([]);
-      setExpanded({});
-    }
-  }
-
-  // CSV export
-  function downloadCSV(filename, rows){
-    const csv = toCSV(rows);
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-    setTimeout(()=>URL.revokeObjectURL(url), 2000);
-  }
-  function exportSeason(){
-    const r1 = [["game_id","stamp","player","buy_in","cash_out_adj","prize_adj","net"]];
-    history.forEach(g=>{ g.players.forEach(p=> r1.push([g.id, g.stamp, p.name, p.buyInTotal, p.cashOut, p.prize, p.net])); });
-    downloadCSV("players.csv", r1);
-
-    const r2 = [["game_id","stamp","from","to","amount"]];
-    history.forEach(g=> (g.txns||[]).forEach(t=> r2.push([g.id, g.stamp, t.from, t.to, t.amount])));
-    downloadCSV("transfers.csv", r2);
-
-    const r3 = [["game_id","stamp","winner","payer","amount","paid","method","paid_at","due"]];
-    history.forEach(g=>{
-      if(!g.perHead) return;
-      g.perHead.payers.forEach(name=>{
-        const rec = g.perHead.payments?.[name] || {paid:false,method:null,paidAt:null};
-        r3.push([g.id, g.stamp, g.perHead.winner, name, g.perHead.amount, rec.paid, rec.method, rec.paidAt, g.perHead.due]);
-      });
-    });
-    downloadCSV("perhead.csv", r3);
-  }
-
-  // confetti
-  function burstConfetti(){
-    let root = document.getElementById('confetti-root');
-    if(!root){ root = document.createElement('div'); root.id='confetti-root'; document.body.appendChild(root); }
-    const colors = ["#fca5a5","#93c5fd","#fde68a","#86efac","#a5b4fc"];
-    for(let i=0;i<60;i++){
-      const el = document.createElement('div');
-      el.className='confetti';
-      el.style.left = (Math.random()*100)+'vw';
-      el.style.background = colors[Math.floor(Math.random()*colors.length)];
-      el.style.transform = `rotate(${Math.random()*360}deg)`;
-      el.style.animationDelay = (Math.random()*200)+'ms';
-      el.style.width = (4+Math.random()*5)+'px';
-      el.style.height = (8+Math.random()*10)+'px';
-      root.appendChild(el);
-      setTimeout(()=>el.remove(), 1400);
-    }
-  }
-  function checkCelebrate(g){
-    if(!g.perHead || g.perHead.celebrated) return false;
-    const allPaid = g.perHead.payers.every(n=> g.perHead.payments[n]?.paid);
-    return allPaid;
-  }
-  useEffect(()=>{
-    history.forEach(g=>{
-      if(checkCelebrate(g) && !celebrated.has(g.id)){
-        burstConfetti();
-        setCelebrated(s=> new Set([...Array.from(s), g.id]));
-        setHistory(h=> h.map(x=> x.id===g.id ? {...x, perHead:{...x.perHead, celebrated:true}} : x));
+        setLastSyncAt(new Date());
+        if (!dead) setTimeout(tick, document.hidden ? 30000 : 10000);
+      }catch(e){
+        if (!dead) setTimeout(tick, 30000);
       }
-    });
-  }, [history]);
-
-  // per-head status/method + PayID
-  function markPerHeadPaid(gameId, name, method){
-    setHistory(h=> h.map(g=>{
-      if(g.id!==gameId) return g;
-      const ph = g.perHead || null; if(!ph) return g;
-      const now = new Date().toISOString();
-      const rec = ph.payments[name] || {paid:false, method:null, paidAt:null};
-      const payments = { ...ph.payments, [name]: { paid:true, method:method||rec.method||"cash", paidAt: now } };
-      return { ...g, perHead: { ...ph, payments } };
-    }));
-  }
-  function setPerHeadMethod(gameId, name, method){
-    setHistory(h=> h.map(g=>{
-      if(g.id!==gameId) return g;
-      const ph = g.perHead || null; if(!ph) return g;
-      const rec = ph.payments[name] || {paid:false, method:null, paidAt:null};
-      return { ...g, perHead: { ...ph, payments: { ...ph.payments, [name]: { ...rec, method } } } };
-    }));
-  }
-  function copyPayID(name){
-    const pid = profiles[name]?.payid;
-    if(!pid){ alert('No PayID stored for '+name); return; }
-    if(navigator.clipboard && window.isSecureContext){
-      navigator.clipboard.writeText(pid); alert('PayID copied for '+name);
-    } else {
-      const area=document.createElement('textarea'); area.value=pid; document.body.appendChild(area); area.select();
-      document.execCommand('copy'); area.remove(); alert('PayID copied for '+name);
-    }
-  }
-
-  // Alerts: unpaid per-head past due
-  const alerts = useMemo(()=>{
-    const items=[]; const now = Date.now();
-    history.forEach(g=>{
-      if(!g.perHead) return;
-      const due = new Date(g.perHead.due).getTime();
-      const unpaid = g.perHead.payers.filter(n=> !g.perHead.payments[n]?.paid);
-      if(unpaid.length && now > due){
-        items.push({ id:g.id, winner:g.perHead.winner, due:g.perHead.due, unpaid, amount:g.perHead.amount });
-      }
-    });
-    return items;
-  }, [history]);
-
-  // Ledgers
-  const ledgers = useMemo(()=>{
-    const L = new Map();
-    const ensure = (n)=>{
-      if(!L.has(n)) L.set(n,{ net:0, owes:new Map(), owedBy:new Map() });
-      return L.get(n);
     };
-    history.forEach(g=>{
-      (g.txns||[]).forEach(t=>{
-        const from=ensure(t.from), to=ensure(t.to);
-        from.net -= t.amount; to.net += t.amount;
-        from.owes.set(t.to, (from.owes.get(t.to)||0) + t.amount);
-        to.owedBy.set(t.from, (to.owedBy.get(t.from)||0) + t.amount);
-      });
-    });
-    const out = {};
-    for (const [name, v] of L) {
-      out[name] = {
-        net: round2(v.net),
-        owes: Array.from(v.owes, ([to,amount])=>({to,amount:round2(amount)})),
-        owedBy: Array.from(v.owedBy, ([from,amount])=>({from,amount:round2(amount)}))
-      };
-    }
-    return out;
-  }, [history]);
+    const t = setTimeout(tick, 10000);
+    return () => { dead = true; clearTimeout(t); };
+  }, [cloudVersion]);
 
-  // Suggested names
-  const knownNames = useMemo(()=>{
-    const set = new Set();
-    players.forEach(p=> p.name && set.add(p.name));
-    history.forEach(g=> g.players.forEach(p=> p.name && set.add(p.name)));
-    return Array.from(set).sort();
-  }, [players, history]);
+  // --- UI containers ---
+  const container = { padding: 12, maxWidth: 960, margin: "0 auto" };
+  const card = { padding: 10, border: "1px solid #eee", borderRadius: 8 };
 
-  // --- Sections ---
-  const GameSection = (
-    <div className="surface" style={{marginTop:16}}>
-      <div className="controls">
-        <div className="stack">
-          <button className="btn primary" onClick={startGame}>Start New</button>
-          <button className="btn secondary" onClick={addPlayer}>Add Player</button>
-          <button className="btn danger" onClick={resetGame}>Reset Players</button>
-          <span className="pill">🎯 Enter cash-outs at the end.</span>
+  return (
+    <div style={container}>
+      {/* Header */}
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <h2 style={{ margin: 0 }}>PocketPoker</h2>
+        <div style={{ fontSize: 13 }}>
+          Sync: <strong>{syncStatus}</strong>{" "}
+          <span style={{ fontFamily: "monospace" }}>v{cloudVersion}</span>
+          {" "}{lastSyncAt && <>• {lastSyncAt.toLocaleTimeString()}</>}
+          <button style={{ marginLeft: 8 }} onClick={async()=>{
+            try{ setSyncStatus("syncing"); const doc=await apiGetSeason(); setHistory(doc.games||[]); setCloudVersion(doc.version||0); setLock(doc.lock||null); setProfiles(doc.profiles||{}); setSyncStatus("upToDate"); setLastSyncAt(new Date()); }
+            catch(e){ setSyncStatus("error"); }
+          }}>Refresh</button>
         </div>
-        <div className="toggles toolbar">
-          <label className="inline">Buy-in (A$)
-            <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
+      </header>
+
+      {/* Host lock */}
+      <section style={{ ...card, marginTop: 8 }}>
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <label>Device:&nbsp;
+            <input value={deviceName} onChange={e=>setDeviceName(e.target.value)} placeholder="Your name (for audit)" />
           </label>
-          <label className="inline">
-            <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
-          </label>
-          <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-          <span className="meta">from each other player</span>
+          {lock ? (
+            <>
+              <span style={{ padding:"4px 8px", background:"#fee", borderRadius:999 }}>
+                🔒 Locked by <strong>{lock.byName || "Host"}</strong>{lock.expiresAt ? ` • until ${new Date(lock.expiresAt).toLocaleString()}` : ""}
+              </span>
+              <button disabled={lock.deviceId !== deviceId} onClick={async()=>{
+                try{ const out = await apiLock("unlock", deviceName, deviceId); setLock(out.lock || null); setCloudVersion(out.version || cloudVersion); }
+                catch(e){ alert("Unlock failed: " + (e.message || "")); }
+              }}>Unlock</button>
+            </>
+          ) : (
+            <button onClick={async()=>{
+              try{ const out = await apiLock("lock", deviceName || "Host", deviceId); setLock(out.lock || null); setCloudVersion(out.version || cloudVersion); }
+              catch(e){ alert("Lock failed: " + (e.message || "")); }
+            }}>Activate Host Lock</button>
+          )}
         </div>
-      </div>
+        <div style={{ fontSize: 12, color:"#666" }}>Auto-unlocks next day (Brisbane time).</div>
+      </section>
 
-      <hr className="hair" />
+      {/* Tabs */}
+      <nav style={{ display:"flex", gap:8, marginTop:8 }}>
+        {["game","history","profiles"].map(key => (
+          <button key={key}
+            onClick={()=>setTab(key)}
+            style={{
+              padding:"6px 10px",
+              border:"1px solid #ddd",
+              borderBottom: tab===key ? "2px solid #333" : "1px solid #ddd",
+              background: tab===key ? "#fff" : "#f8f8f8",
+              borderRadius:6,
+              fontWeight: tab===key ? 700 : 400
+            }}
+          >
+            {key==="game"?"Game":key==="history"?"History":"Profiles"}
+          </button>
+        ))}
+      </nav>
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Player</th>
-            <th className="center">Buy-ins</th>
-            <th className="center">Cash-out</th>
-            <th className="center">Net</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {players.map(p => (<PlayerRow key={p.id} p={p} onChange={updatePlayer} buyInAmount={buyInAmount} />))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <th>Total</th>
-            <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
-            <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
-            <th className="center mono">{totals.diff.toFixed(2)}</th>
-            <th className="center"></th>
-          </tr>
-        </tfoot>
-      </table>
+      {/* GAME TAB */}
+      {tab==="game" && (
+        <section style={{ ...card, marginTop: 8, position:"relative" }}>
+          {lockedByOther && (
+            <div style={{ position:"absolute", inset:0, background:"rgba(0,0,0,0.25)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:5 }}>
+              <div style={{ background:"#fff", padding:"6px 10px", borderRadius:999 }}>🔒 Read-only: locked by {lock?.byName || "Host"}</div>
+            </div>
+          )}
 
-      {Math.abs(totals.diff) > 0.01 ? (
-        <div className="header" style={{marginTop:12}}>
-          <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
-          <div className="toolbar">
-            <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
-            <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save</label>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+            <label>Buy-in A$ <input type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1, parseFloat(e.target.value||50)))} disabled={lockedByOther}/></label>
+            <label><input type="checkbox" checked={prizeFromPot} onChange={e=>setPrizeFromPot(e.target.checked)} disabled={lockedByOther}/> Prize from pot</label>
+            <label>A$ <input type="number" min="0" step="1" value={prizeAmount} onChange={e=>setPrizeAmount(Math.max(0, parseFloat(e.target.value||0)))} disabled={lockedByOther}/></label>
+            <label>Settlement
+              <select value={settlementMode} onChange={e=>setSettlementMode(e.target.value)} disabled={lockedByOther}>
+                <option value="equalSplit">Equal-split per loser</option>
+              </select>
+            </label>
           </div>
-        </div>
-      ) : (
-        <div className="header" style={{marginTop:12}}>
-          <div className="ribbon">✅ Balanced: totals match.</div>
-          <div className="toolbar"></div>
-        </div>
+
+          <table style={{ width:"100%", borderCollapse:"collapse", marginTop: 8 }}>
+            <thead>
+              <tr><th align="left">Player</th><th>Buy-ins</th><th>Cash-out</th><th>Net</th><th></th></tr>
+            </thead>
+            <tbody>
+              {players.map(p => (
+                <tr key={p.id}>
+                  <td><input value={p.name} onChange={e=>setPlayers(ps=>ps.map(x=>x.id===p.id?{...x,name:e.target.value}:x))} placeholder="Name" disabled={lockedByOther}/></td>
+                  <td align="center"><input type="number" min="0" step="1" value={p.buyIns} onChange={e=>setPlayers(ps=>ps.map(x=>x.id===p.id?{...x,buyIns:Math.max(0,parseInt(e.target.value||0))}:x))} disabled={lockedByOther}/></td>
+                  <td align="center"><input type="number" step="1" value={p.cashOut} onChange={e=>setPlayers(ps=>ps.map(x=>x.id===p.id?{...x,cashOut:parseFloat(e.target.value||0)}:x))} disabled={lockedByOther}/></td>
+                  <td align="center" style={{ fontFamily:"monospace" }}>{round2(p.cashOut - p.buyIns*buyInAmount).toFixed(2)}</td>
+                  <td align="center"><button onClick={()=>setPlayers(ps=>ps.filter(x=>x.id!==p.id))} disabled={lockedByOther}>Remove</button></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr><th>Total</th><th align="center" style={{fontFamily:"monospace"}}>{aud(totals.buyInSum)}</th><th align="center" style={{fontFamily:"monospace"}}>{aud(totals.cashAdjSum)}</th><th align="center" style={{fontFamily:"monospace"}}>{totals.diff.toFixed(2)}</th><th/></tr>
+            </tfoot>
+          </table>
+
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: Math.abs(totals.diff)>0.01 ? "#b00" : "#0a0" }}>
+              {Math.abs(totals.diff)>0.01 ? ("⚠️ Off by " + aud(totals.diff)) : "✅ Balanced"}
+            </div>
+            <div>
+              <label style={{ marginRight: 8 }}><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} disabled={lockedByOther}/> Override mismatch</label>
+              <button onClick={()=>setPlayers(ps=>[...ps, { id: uid(), name:"", buyIns:0, cashOut:0 }])} disabled={lockedByOther}>Add Player</button>
+              <button onClick={saveGame} disabled={lockedByOther} style={{ marginLeft: 6 }}>End Game & Save</button>
+            </div>
+          </div>
+        </section>
       )}
 
-      <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
-        <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
-      </div>
-    </div>
-  );
+      {/* HISTORY TAB */}
+      {tab==="history" && (
+        <section style={{ ...card, marginTop: 8 }}>
+          <h3 style={{ margin: "4px 0 8px" }}>History</h3>
+          {history.length === 0 ? <div style={{ color:"#666" }}>No games yet.</div> : (
+            <div style={{ display:"grid", gap: 8 }}>
+              {history.map(g => {
+                const winNeed = {}; const winPaid = {};
+                (g.players || []).forEach(p => { if ((p.net || 0) > 0) { winNeed[p.name] = round2((winNeed[p.name] || 0) + p.net); } });
+                (g.txns || []).forEach(t => { winPaid[t.to] = round2((winPaid[t.to] || 0) + (t.paid ? t.amount : 0)); });
 
-  const HistorySection = (
-    <div className="surface">
-      <div className="header" style={{marginBottom:0}}>
-        <h3 style={{margin:0}}>Game Overview (History)</h3>
-        <div className="toolbar">
-          <button className="btn secondary" onClick={exportSeason}>Export CSVs</button>
-          <button className="btn danger" onClick={clearHistory}>Delete All</button>
-        </div>
-      </div>
-      <div className="meta">Tap details to see per-head payments and settlement transfers.</div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Players (with net)</th>
-            <th className="center">Tot Buy-ins</th>
-            <th className="center">Tot Cash-outs</th>
-            <th className="center">Diff</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {history.length===0 ? (
-            <tr><td colSpan="6" className="center meta">No games saved yet.</td></tr>
-          ) : history.map(g=>{
-            const key=g.id;
-            const playersSorted=[...g.players].sort((a,b)=>b.net-a.net);
-            const winner = playersSorted[0];
-            const summary=playersSorted.map(p=>(
-              <span key={p.name} style={{marginRight:8}}>
-                {p.name} ({p.net>=0?'+':''}{p.net.toFixed(2)})
-                {p.name===winner?.name && <span className="chip" title="Top winner"/>}
-              </span>
-            ));
-            return (
-              <React.Fragment key={g.id}>
-                <tr>
-                  <td className="meta mono">{new Date(g.stamp).toLocaleString()}</td>
-                  <td>{summary}</td>
-                  <td className="center mono">{aud(g.totals.buyIns)}</td>
-                  <td className="center mono">{aud(g.totals.cashOuts)}</td>
-                  <td className="center mono">{aud(g.totals.diff)}</td>
-                  <td className="center">
-                    <div className="toolbar" style={{justifyContent:'center'}}>
-                      <button className="btn secondary" onClick={()=>setExpanded(e=>({...e,[key]:!e[key]}))}>{expanded[key]?'Hide':'Details'}</button>
-                      <button className="btn danger" onClick={()=>deleteGame(g.id)}>Delete</button>
+                const isOpen = !!expanded[g.id];
+                const toggleOpen = () => setExpanded(s => ({ ...s, [g.id]: !s[g.id] }));
+
+                const rPlayers = [["name","buyIns","buyInTotal","cashOutAdj","prizeAdj","net"]];
+                (g.players || []).forEach(p => rPlayers.push([p.name, p.buyIns, p.buyInTotal, p.cashOut, p.prize, p.net]));
+                const rTx = [["from","to","amount","paid"]];
+                (g.txns || []).forEach(t => rTx.push([t.from, t.to, t.amount, t.paid ? "yes" : "no"]));
+
+                // prize info
+                const N = (g.players || []).length;
+                const feePer = (g?.settings?.prize?.mode === "pot_all" ? Number(g?.settings?.prize?.amount || 20) : 0);
+                const prizePool = round2(N * feePer);
+                const winners = (g.players || []).filter(p => (p.net || 0) > 0).map(p => p.name);
+
+                return (
+                  <div key={g.id} style={{ border:"1px solid #eee", borderRadius: 8, padding: 10 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                      <div>
+                        <div style={{ fontFamily:"monospace" }}>{new Date(g.stamp).toLocaleString()}</div>
+                        <div style={{ fontSize:12, color:"#666" }}>{(g.players || []).map(p => p.name).join(", ")}</div>
+                      </div>
+                      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                        <button onClick={()=>downloadCSV("players.csv", rPlayers)}>Export Players CSV</button>
+                        <button onClick={()=>downloadCSV("transfers.csv", rTx)}>Export Transfers CSV</button>
+                        <button onClick={toggleOpen}>{isOpen ? "Hide details" : "Details"}</button>
+                        <button onClick={()=>removeGame(g.id)}>Delete</button>
+                      </div>
                     </div>
-                  </td>
-                </tr>
-                {expanded[key] && (
-                  <tr>
-                    <td colSpan="6">
-                      <div className="detail">
-                        <strong>Per-player results</strong>
-                        <table className="table">
-                          <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
+
+                    {/* Winners chips */}
+                    <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginTop: 8 }}>
+                      {(g.players || []).filter(p => (p.net || 0) > 0).map(p => {
+                        const need = winNeed[p.name] || 0, got = winPaid[p.name] || 0;
+                        const done = Math.abs(need - got) < 0.01;
+                        const avatar = profiles?.[p.name]?.avatarDataUrl || "";
+                        return (
+                          <div key={p.name} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", border:"1px solid #eee", borderRadius: 999, background: done ? "#eaffea" : "#fff" }}>
+                            <div style={{ width:28, height:28, borderRadius:"50%", overflow:"hidden", background:"#ddd" }}>
+                              {avatar ? <img src={avatar} alt="" width={28} height={28}/> : null}
+                            </div>
+                            <div><strong>{p.name}</strong><div style={{ fontSize:11, color:"#666" }}>{aud(got)} / {aud(need)}</div></div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Transfers */}
+                    <div style={{ marginTop: 8 }}>
+                      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                        <thead><tr><th align="left">From</th><th align="left">To</th><th align="right">Amount</th><th align="center">Paid?</th></tr></thead>
+                        <tbody>
+                          {(g.txns || []).map((t, idx) => (
+                            <tr key={idx}>
+                              <td>{t.from}{profiles?.[t.from]?.payId ? <> (PayID: {profiles[t.from].payId})</> : null}</td>
+                              <td>{t.to}{profiles?.[t.to]?.payId ? <> (PayID: {profiles[t.to].payId})</> : null}</td>
+                              <td align="right" style={{ fontFamily:"monospace" }}>{aud(t.amount)}</td>
+                              <td align="center"><input type="checkbox" checked={!!t.paid} onChange={()=>togglePaid(g, idx)} disabled={lockedByOther}/></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Ledger / details */}
+                    {isOpen && (
+                      <div style={{ marginTop: 8, background:"#fafafa", border:"1px dashed #ddd", borderRadius: 8, padding: 8 }}>
+                        <div style={{ marginBottom: 6, fontWeight: 600 }}>Ledger</div>
+                        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                          <thead><tr><th align="left">Player</th><th align="right">Buy-in</th><th align="right">Cash (adj)</th><th align="right">Prize adj</th><th align="right">Net</th></tr></thead>
                           <tbody>
-                            {playersSorted.map(p=>(
-                              <tr key={p.name}>
-                                <td>{p.name}{p.name===winner?.name && <span className="chip" />}</td>
-                                <td className="center mono">{aud(p.buyInTotal)}</td>
-                                <td className="center mono">{aud(p.cashOut)}</td>
-                                <td className="center mono">{aud(p.prize)}</td>
-                                <td className="center mono">{p.net>=0?'+':''}{aud(p.net)}</td>
+                            {(g.players || []).map((p, i) => (
+                              <tr key={i}>
+                                <td>{p.name}</td>
+                                <td align="right" style={{ fontFamily:"monospace" }}>{aud(p.buyInTotal)}</td>
+                                <td align="right" style={{ fontFamily:"monospace" }}>{aud(p.cashOut)}</td>
+                                <td align="right" style={{ fontFamily:"monospace" }}>{aud(p.prize)}</td>
+                                <td align="right" style={{ fontFamily:"monospace" }}>{aud(p.net)}</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
-
-                        {g.perHead && (
-                          <div>
-                            <div style={{height:8}} />
-                            <strong>Winner's A${g.perHead.amount} per-head payments</strong> <span className="meta">Winner: {g.perHead.winner} • Due: {new Date(g.perHead.due).toLocaleString()}</span>
-                            <table className="table">
-                              <thead><tr><th>Payer</th><th className="center">Method</th><th className="center">Status</th><th className="center">Paid at</th><th className="center">PayID</th></tr></thead>
-                              <tbody>
-                                {g.perHead.payers.map(name=>{
-                                  const rec = g.perHead.payments?.[name] || {paid:false,method:null,paidAt:null};
-                                  const overdue = !rec.paid && (Date.now() > new Date(g.perHead.due).getTime());
-                                  return (
-                                    <tr key={name}>
-                                      <td>{name}</td>
-                                      <td className="center">
-                                        <select value={rec.method||""} onChange={e=>setPerHeadMethod(g.id,name,e.target.value||null)}>
-                                          <option value="">—</option>
-                                          <option value="cash">Cash</option>
-                                          <option value="payid">PayID</option>
-                                        </select>
-                                      </td>
-                                      <td className="center">
-                                        {rec.paid ? <span className="pill">Paid</span> :
-                                          <button className="btn success" onClick={()=>markPerHeadPaid(g.id,name,rec.method||'cash')}>Mark paid</button>}
-                                        {overdue && <div className="meta">⚠️ overdue</div>}
-                                      </td>
-                                      <td className="center mono">{rec.paidAt ? new Date(rec.paidAt).toLocaleString() : '—'}</td>
-                                      <td className="center">
-                                        {profiles[name]?.payid ? (
-                                          <button className="btn secondary" onClick={()=>copyPayID(name)}>Copy</button>
-                                        ) : <span className="meta">—</span>}
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                        {feePer > 0 && (
+                          <div style={{ marginTop: 8, fontSize: 12 }}>
+                            <div>Prize pool: {N} × {aud(feePer)} = <strong>{aud(prizePool)}</strong></div>
+                            <div>Distributed to top winner(s): {winners.join(", ") || "—"}</div>
+                            <div>Everyone contributed {aud(feePer)} (shown as −{feePer} prize adj), winners received their share (shown as +).</div>
                           </div>
                         )}
-
-                        <div style={{height:8}} />
-                        <strong>Transfers for settlement</strong>
-                        <table className="table">
-                          <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
-                          <tbody>
-                            {(g.txns||[]).length===0 ? (
-                              <tr><td colSpan="3" className="center meta">No transfers needed.</td></tr>
-                            ) : (g.txns||[]).map((t,i)=>(
-                              <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
-                            ))}
-                          </tbody>
-                        </table>
                       </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
 
-  const LedgersSection = (
-    <div className="surface">
-      <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
-      <div className="meta">Clean + collapsible. Tap Show to reveal who they owe / who owes them.</div>
-      <table className="table">
-        <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Actions</th></tr></thead>
-        <tbody>
-          {Object.keys(ledgers).length===0 ? (
-            <tr><td colSpan="3" className="center meta">No history yet.</td></tr>
-          ) : Object.entries(ledgers).sort((a,b)=> (b[1].net - a[1].net)).map(([name,info])=>{
-            const key = name;
+      {/* PROFILES TAB */}
+      {tab==="profiles" && (
+        <section style={{ ...card, marginTop: 8 }}>
+          <h3 style={{ margin:"4px 0 8px" }}>Profiles</h3>
+          {(() => {
+            const nameSet = new Set();
+            players.forEach(p => p.name && nameSet.add(p.name));
+            history.forEach(g => (g.players || []).forEach(p => p.name && nameSet.add(p.name)));
+            const names = Array.from(nameSet).sort();
+            if (names.length === 0) return <div style={{ color:"#666" }}>No names yet. Add players above and save a game.</div>;
             return (
-              <React.Fragment key={name}>
-                <tr>
-                  <td>{name}</td>
-                  <td className="center mono">{info.net>=0?'+':''}{aud(info.net)}</td>
-                  <td className="center">
-                    <button className="btn secondary" onClick={()=>setLedgerExpanded(e=>({...e,[key]:!e[key]}))}>
-                      {ledgerExpanded[key] ? 'Hide' : 'Show'}
-                    </button>
-                  </td>
-                </tr>
-                {ledgerExpanded[key] && (
-                  <tr>
-                    <td colSpan="3">
-                      <div className="detail">
-                        
-                          {(() => {
-                            const sum = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
-                            const oweYou = sum(info.owedBy);
-                            const youOwe = sum(info.owes);
-                            return (
-                              <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
-                                {oweYou > 0 && (
-                                  <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
-                                )}
-                                {youOwe > 0 && (
-                                  <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
-                                )}
-                              </div>
-                            );
-                          })()}<table className="table">
-                          <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
-                          <tbody>
-                            <tr>
-                              <td>
-                                {(info.owes||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owes.map((x,i)=>(<div key={i}>{x.to}</div>))}
-                              </td>
-                              <td className="center mono">
-                                {(info.owes||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owes.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                              </td>
-                              <td>
-                                {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owedBy.map((x,i)=>(<div key={i}>{x.from}</div>))}
-                              </td>
-                              <td className="center mono">
-                                {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owedBy.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
+              <div style={{ display:"grid", gap: 8 }}>
+                {names.map(name => {
+                  const prof = profiles?.[name] || {};
+                  return (
+                    <div key={name} style={{ display:"flex", alignItems:"center", gap:12, padding:10, border:"1px solid #eee", borderRadius: 8 }}>
+                      <div style={{ width:48, height:48, borderRadius:"50%", overflow:"hidden", background:"#ddd" }}>
+                        {prof.avatarDataUrl ? <img src={prof.avatarDataUrl} alt="" width={48} height={48}/> : null}
                       </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  const ProfilesSection = (
-    <div className="surface">
-      <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
-      <div className="meta">Add optional PayIDs so it’s one tap to copy during payouts.</div>
-      <table className="table">
-        <thead><tr><th>Name</th><th>PayID</th><th className="center">Copy</th></tr></thead>
-        <tbody>
-          {knownNames.length===0 ? (
-            <tr><td colSpan="3" className="center meta">No known names yet. Add players above first.</td></tr>
-          ) : knownNames.map(n=>{
-            const v = profiles[n]?.payid || '';
-            return (
-              <tr key={n}>
-                <td>{n}</td>
-                <td><input type="text" value={v} onChange={e=>setProfiles(p=>({...p,[n]:{payid:e.target.value}}))} placeholder="email/phone PayID" /></td>
-                <td className="center">{v ? <button className="btn secondary" onClick={()=>copyPayID(n)}>Copy</button> : <span className="meta">—</span>}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  return (
-    <>
-      {/* Topbar */}
-      <div className="pp-topbar">
-        <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
-        <div className="brand">
-          <h1>PocketPoker</h1>
-          <span className="badge">Local</span>
-        </div>
-        <div className="pp-hide-mobile">
-          <div className="toolbar">
-            <div className="switch">
-              <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
-              <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
-            </div>
-            <div className="switch">
-              <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
-              <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Drawer */}
-      <div className={"pp-drawer " + (sidebarOpen?'open':'')}>
-        <div className="title-badge" style={{justifyContent:'space-between', width:'100%'}}>
-          <strong>Menu</strong>
-          <button className="pp-burger" onClick={()=>setSidebarOpen(false)}>✕</button>
-        </div>
-        <div style={{height:8}} />
-        <div className="switch">
-          <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
-          <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
-        </div>
-        <div style={{height:8}} />
-        <div className="switch">
-          <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
-          <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
-        </div>
-        <div className="nav-list">
-          {["game","history","ledgers","profiles"].map(k=>(
-            <div key={k} className={"nav-item " + (tab===k?'active':'')} onClick={()=>{setTab(k); setSidebarOpen(false);}}>
-              <span style={{textTransform:'capitalize'}}>{k}</span>
-              <span>›</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
-
-      <div className="container">
-        <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
-
-        {/* Alerts visible on Game & History tabs */}
-        {(tab==="game" || tab==="history") && alerts.length>0 && (
-          <div className="surface" style={{marginTop:14}}>
-            {alerts.map(a=> (
-              <div key={a.id} className="alert" style={{marginBottom:8}}>
-                Unpaid A${a.amount} per-head — winner <strong>{a.winner}</strong>, due <strong>{new Date(a.due).toLocaleString()}</strong>. Unpaid: {a.unpaid.join(', ')}.
+                      <div style={{ flex: 1 }}>
+                        <div><strong>{name}</strong></div>
+                        <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:4, flexWrap:"wrap" }}>
+                          <input placeholder="PayID (email/phone)" defaultValue={prof.payId || ""} onBlur={async e=>{
+                            try{ const out = await apiProfileUpsert(name, { payId: e.target.value }, deviceId, deviceName); setProfiles(out.profiles || {}); setCloudVersion(out.version || cloudVersion); }
+                            catch(e){ alert("Saving PayID failed."); }
+                          }} style={{ minWidth: 240 }}/>
+                          <label style={{ fontSize: 12 }}>Avatar: <input type="file" accept="image/*" onChange={e=>{
+                            const file = e.target.files?.[0]; if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = async () => {
+                              try{ const out = await apiProfileUpsert(name, { avatarDataUrl: String(reader.result || "") }, deviceId, deviceName); setProfiles(out.profiles || {}); setCloudVersion(out.version || cloudVersion); }
+                              catch(e){ alert("Avatar upload failed (file too big?)"); }
+                            };
+                            reader.readAsDataURL(file);
+                          }}/></label>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        )}
-
-        {tab==="game" && GameSection}
-        {tab==="history" && HistorySection}
-        {tab==="ledgers" && LedgersSection}
-        {tab==="profiles" && ProfilesSection}
-
-        {/* Bottom tabbar for quick nav on mobile */}
-        <div className="tabbar">
-          <button className={"btn " + (tab==='game'?'primary':'secondary')} onClick={()=>setTab('game')}>Game</button>
-          <button className={"btn " + (tab==='history'?'primary':'secondary')} onClick={()=>setTab('history')}>History</button>
-          <button className={"btn " + (tab==='ledgers'?'primary':'secondary')} onClick={()=>setTab('ledgers')}>Ledgers</button>
-          <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
-        </div>
-
-        <div className="footer meta">Tip: “Start New” keeps players, zeroes amounts. Per-head payments are tracked under each game.</div>
-      </div>
-    </>
+            );
+          })()}
+        </section>
+      )}
+    </div>
   );
 }
