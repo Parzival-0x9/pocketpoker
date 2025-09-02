@@ -1,105 +1,21 @@
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
-
-// ===============================
-// Inline helpers (no extra files)
-// ===============================
-
-// persistent device id (per browser) for lock API
-const DEVICE_KEY = "pp_device";
-function getDeviceId() {
-  try {
-    let id = localStorage.getItem(DEVICE_KEY);
-    if (!id) {
-      id = (crypto?.randomUUID?.() || Math.random().toString(36).slice(2)) + "-" + Date.now().toString(36);
-      localStorage.setItem(DEVICE_KEY, id);
-    }
-    return id;
-  } catch {
-    return "unknown";
-  }
-}
-
-// who-am-I helpers (stored locally)
-const WHOAMI_KEY = "pp_whoami";
-function getWhoAmI(){
-  try{ return localStorage.getItem(WHOAMI_KEY) || ""; }catch{ return ""; }
-}
-function setWhoAmI(name){
-  try{
-    if(name) localStorage.setItem(WHOAMI_KEY, String(name));
-    else localStorage.removeItem(WHOAMI_KEY);
-  }catch{}
-}
-
-// simple modal picker to choose a locker from current players
-function chooseLocker(names){
-  if(!Array.isArray(names) || names.length===0){
-    const v = window.prompt("No named players yet. Enter a name to lock as:");
-    return Promise.resolve(v && v.trim() ? v.trim() : null);
-  }
-  return new Promise((resolve)=>{
-    const root = document.createElement("div");
-    root.className = "pp-choose-locker-root";
-    root.innerHTML = `
-      <div class="ppcl-backdrop"></div>
-      <div class="ppcl-card">
-        <div class="ppcl-title">Activate Host Lock</div>
-        <div class="ppcl-list">
-          ${names.map(n=>`<button class="ppcl-opt" data-name="${n}">${n}</button>`).join("")}
-        </div>
-        <div class="ppcl-actions">
-          <button class="ppcl-cancel">Cancel</button>
-        </div>
-      </div>`;
-    document.body.appendChild(root);
-
-    const cleanup = (val=null)=>{ root.remove(); resolve(val); };
-    root.querySelector(".ppcl-backdrop").addEventListener("click", ()=>cleanup(null));
-    root.querySelector(".ppcl-cancel").addEventListener("click", ()=>cleanup(null));
-    root.querySelectorAll(".ppcl-opt").forEach(btn=> btn.addEventListener("click", ()=> cleanup(btn.dataset.name)));
-  });
-}
-// inject minimal styles for the picker (string added to head)
-(function injectLockerStyles(){
-  const css = `
-  .pp-choose-locker-root{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center}
-  .ppcl-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
-  .ppcl-card{position:relative;background:var(--surface,#1f2937);color:inherit;border-radius:14px;padding:14px;width:min(92vw,420px);box-shadow:0 10px 30px rgba(0,0,0,.3)}
-  .ppcl-title{font-weight:700;margin-bottom:8px}
-  .ppcl-list{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;max-height:240px;overflow:auto}
-  .ppcl-opt{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);cursor:pointer}
-  .ppcl-opt:hover{filter:brightness(1.1)}
-  .ppcl-actions{display:flex;justify-content:flex-end;margin-top:10px}
-  .ppcl-cancel{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:transparent;color:inherit;cursor:pointer}
-  `;
-  try{ const style=document.createElement("style"); style.textContent=css; document.head.appendChild(style); }catch{}
-})();
-
-// ===============================
-// App constants & state helpers
-// ===============================
-
 // --- Cloud sync (Upstash via Vercel API) ---
 const API_BASE = ""; // same origin
 const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
+const PIN_KEY = "pp_season_key"; // reserved for future PIN gate
+
 
 const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
-// 8:30 PM Friday countdown (local)
-function useCountdownToFriday830(){
+function useCountdownToFriday(){
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
-  const cur = new Date(now);
-  const day = cur.getDay(); // 0 Sun .. 6 Sat
-  let add = (5 - day + 7) % 7;
-  if (add === 0) add = 7; // always the NEXT Friday
-  const due = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + add, 20, 30, 0, 0); // 20:30
-  const diff = Math.max(0, due.getTime()-now);
+  const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
   const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
   const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
   return { due, days, hrs, mins, secs };
@@ -122,16 +38,7 @@ export default function App(){
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
 
-  // --- Host Lock state (server is source of truth) ---
-  const [hostLock,setHostLock] = useState({ active:false, by:null, until:null, at:null });
-
-  // --- Identity for this device (who can edit while locked) ---
-  const [whoAmI, setWhoAmIState] = useState(()=> getWhoAmI() || "");
-  useEffect(()=>{ setWhoAmI(whoAmI || ""); }, [whoAmI]);
-
-  const playerNames = useMemo(()=> Array.from(new Set((players||[]).map(p=> (p.name||"").trim()).filter(Boolean))), [players]);
-  const canEdit = !hostLock.active || (whoAmI && hostLock.by && whoAmI === hostLock.by);
-
+  
   // ---- Cloud API helpers ----
   async function apiGetSeason(){
     try{
@@ -148,8 +55,9 @@ export default function App(){
         body: JSON.stringify({ seasonId: SEASON_ID, game })
       });
       if(res.status===409){
+        // fetch latest and retry once
         const doc = await apiGetSeason();
-        hydrateFromDoc(doc);
+        setHistory(doc.games||[]); setCloudVersion(doc.version||0);
         const res2 = await fetch(`${API_BASE}/api/season/append-game`, {
           method: "POST",
           headers: { "Content-Type":"application/json", "If-Match": String(doc.version||0) },
@@ -171,7 +79,7 @@ export default function App(){
       });
       if(res.status===409){
         const doc = await apiGetSeason();
-        hydrateFromDoc(doc);
+        setHistory(doc.games||[]); setCloudVersion(doc.version||0);
         const res2 = await fetch(`${API_BASE}/api/season/delete-game`, {
           method: "POST",
           headers: { "Content-Type":"application/json", "If-Match": String(doc.version||0) },
@@ -185,98 +93,13 @@ export default function App(){
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
   }
 
-  // Align to server: send action/byName/deviceId; handle 423 locked-by-other
-  async function apiLockSeason(locked, byName){
-    const deviceId = getDeviceId();
-    const payload = {
-      seasonId: SEASON_ID,
-      action: locked ? "lock" : "unlock",
-      deviceId,
-    };
-    if (locked && byName) payload.byName = byName;
-
-    const res = await fetch(`${API_BASE}/api/season/lock`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-client-id": deviceId,
-        "x-client-name": byName || hostLock.by || "Unknown",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (res.status === 423) {
-      const doc = await res.json().catch(() => null);
-      if (doc?.lock?.byName) {
-        alert(`Game is locked by ${doc.lock.byName} on another device.`);
-      } else {
-        alert("Game is locked by another device.");
-      }
-      if (doc) hydrateFromDoc(doc);
-      return;
-    }
-
-    if(!res.ok){
-      const msg = await res.text();
-      alert(msg || "Failed to toggle host lock");
-      return;
-    }
-    const doc = await res.json().catch(()=>null);
-    if (doc) hydrateFromDoc(doc);
-    else setHostLock(s=>({ ...s, active: locked, by: locked ? (byName||s.by) : null }));
-  }
-
-  // Force unlock (for emergencies). Requires server support.
-  async function forceUnlock(){
-    try{
-      const deviceId = getDeviceId();
-      const res = await fetch(`${API_BASE}/api/season/lock`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-client-id": deviceId,
-          "x-client-name": whoAmI || hostLock.by || "Unknown",
-        },
-        body: JSON.stringify({
-          seasonId: SEASON_ID,
-          action: "unlock",
-          deviceId,
-          force: true
-        }),
-      });
-      const body = await res.text();
-      let doc = null;
-      try { doc = JSON.parse(body); } catch {}
-      if(!res.ok){
-        alert((doc && (doc.error || doc.message)) || body || "Failed to clear Host Lock");
-        if (doc) hydrateFromDoc(doc);
-        return;
-      }
-      if (doc) hydrateFromDoc(doc);
-      alert("Host Lock cleared (server permitted).");
-    }catch(e){
-      alert(e?.message || "Failed to clear Host Lock");
-    }
-  }
-
-  // Merge server doc into local UI state
-  function hydrateFromDoc(doc){
-    if(doc && Array.isArray(doc.games)){ setHistory(doc.games); }
-    if(doc && typeof doc.version==='number'){ setCloudVersion(doc.version); }
-    const lock = doc && (doc.lock || {});
-    const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
-    const by = lock.byName || lock.by || lock.user || lock.device || doc.by || null;
-    const until = lock.until || lock.unlockAt || null;
-    const at = lock.at || lock.lockedAt || null;
-    setHostLock({ active, by, until, at });
-  }
-
   // Manual refresh
   async function refreshSeason(){
     try{
       setSyncStatus("syncing");
       const doc = await apiGetSeason();
-      hydrateFromDoc(doc);
+      setHistory(doc.games||[]);
+      setCloudVersion(doc.version||0);
       setSyncStatus("upToDate");
     }catch(e){
       setSyncStatus("error");
@@ -309,37 +132,37 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
-  const {days,hrs,mins,secs} = useCountdownToFriday830();
+  const {due,days,hrs,mins,secs} = useCountdownToFriday();
 
-  // Load season on mount + polling
+  
+  // Load season from cloud on mount & set up polling
   useEffect(()=>{
     (async()=>{
       try{
         setSyncStatus("syncing");
         const doc = await apiGetSeason();
-        hydrateFromDoc(doc);
+        if(Array.isArray(doc.games) && doc.games.length>0){
+          setHistory(doc.games);
+        }
+        setCloudVersion(doc.version||0);
         setSyncStatus("upToDate");
       }catch(e){ setSyncStatus("error"); }
     })();
   },[]);
+
   useEffect(()=>{
     const t = setInterval(async()=>{
       try{
         const doc = await apiGetSeason();
         if((doc.version||0)!==cloudVersion){
-          hydrateFromDoc(doc);
-        }else{
-          const lock = doc && (doc.lock || {});
-          const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
-          const curBy = lock.byName || lock.by || null;
-          if(active !== hostLock.active || curBy !== hostLock.by){
-            hydrateFromDoc(doc);
-          }
+          setHistory(doc.games||[]);
+          setCloudVersion(doc.version||0);
         }
-      }catch(e){ /* ignore transient */ }
+      }catch(e){ /* ignore transient errors */ }
     }, 10000);
     return ()=>clearInterval(t);
-  },[cloudVersion, hostLock.active, hostLock.by]);
+  },[cloudVersion]);
+
 
   const totals=useMemo(()=>{
     const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
@@ -377,7 +200,7 @@ export default function App(){
 
   async function saveGameToHistory(){
     const stamp = new Date().toISOString();
-    const perHeadDue = nextFridayISO(stamp); // keep server-side convention; banner uses 8:30pm but due can be from calc.js
+    const perHeadDue = nextFridayISO(stamp);
     const perHeadPayments = {};
     totals.perHeadPayers.forEach(n=> perHeadPayments[n] = { paid:false, method:null, paidAt:null });
     const g={ id:uid(), stamp,
@@ -394,14 +217,16 @@ export default function App(){
         celebrated:false
       } : null
     };
-    try{
+    try{ 
       setSyncStatus("syncing");
       const doc = await apiAppendGame(g); 
-      hydrateFromDoc(doc);
+      setHistory(doc.games||[]); 
+      setCloudVersion(doc.version||0); 
       setSyncStatus("upToDate");
-    }catch(e){
-      console.error(e);
-      setHistory(h=>[g,...h]); // local fallback
+    }
+    catch(e){ 
+      console.error(e); 
+      setHistory(h=>[g,...h]); 
       setSyncStatus("error");
     }
   }
@@ -417,7 +242,7 @@ export default function App(){
         try{
           setSyncStatus("syncing");
           const doc = await apiDeleteGame(id);
-          hydrateFromDoc(doc);
+          setHistory(doc.games||[]); setCloudVersion(doc.version||0);
           setSyncStatus("upToDate");
         }catch(e){
           console.error(e);
@@ -565,7 +390,7 @@ export default function App(){
     return out;
   }, [history]);
 
-  // Suggested names (for convenience)
+  // Suggested names
   const knownNames = useMemo(()=>{
     const set = new Set();
     players.forEach(p=> p.name && set.add(p.name));
@@ -573,73 +398,24 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // Read-only wrapper when host locked (only blocks if you're NOT the locker)
-  function Section({children, title}){
-    const lockedForMe = (hostLock.active && (!whoAmI || whoAmI !== hostLock.by));
-    return (
-      <div className="surface" style={{position:'relative'}}>
-        {title ? <div className="header" style={{marginBottom:0}}><h3 style={{margin:0}}>{title}</h3></div> : null}
-        {children}
-        {lockedForMe && (
-          <>
-            <div
-              title="Host Lock: read-only"
-              style={{position:'absolute', inset:0, background:'rgba(0,0,0,.12)', borderRadius:18, pointerEvents:'auto'}}
-            />
-            <div
-              style={{position:'absolute', top:10, right:10, background:'rgba(0,0,0,.65)', color:'#fff', padding:'6px 10px',
-                      borderRadius:12, border:'1px solid rgba(255,255,255,.15)', fontSize:12}}
-            >
-              🔒 Read-only (Host Lock{hostLock.by?` by ${hostLock.by}`:''})
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  // --- Section UIs ---
+  // --- Sections ---
   const GameSection = (
-    <Section>
-      {/* Next game banner */}
-      <div
-        style={{
-          display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', margin:'12px 0 14px 0',
-          padding:'10px 12px', border:'1px solid rgba(255,255,255,.08)',
-          background:'rgba(255,255,255,.04)', borderRadius:12
-        }}
-      >
-        <div style={{fontSize:14, lineHeight:1.3}}>
-          Next Friday at <strong>8:30pm</strong> in{" "}
-          <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙{" "}
-          {whoAmI ? (
-            <span className="meta">
-              (You are {whoAmI}{hostLock.active && whoAmI===hostLock.by ? " • editor" : ""})
-            </span>
-          ) : null}
-          {hostLock.active ? (
-            <span className="badge" style={{ marginLeft: 8 }}>
-              🔒 Locked{hostLock.by ? ` by ${hostLock.by}` : ""}
-            </span>
-          ) : null}
-        </div>
-      </div>
-
+    <div className="surface" style={{marginTop:16}}>
       <div className="controls">
         <div className="stack">
-          <button className="btn primary" onClick={startGame} disabled={!canEdit}>Start New</button>
-          <button className="btn secondary" onClick={addPlayer} disabled={!canEdit}>Add Player</button>
-          <button className="btn danger" onClick={resetGame} disabled={!canEdit}>Reset Players</button>
+          <button className="btn primary" onClick={startGame}>Start New</button>
+          <button className="btn secondary" onClick={addPlayer}>Add Player</button>
+          <button className="btn danger" onClick={resetGame}>Reset Players</button>
           <span className="pill">🎯 Enter cash-outs at the end.</span>
         </div>
         <div className="toggles toolbar">
           <label className="inline">Buy-in (A$)
-            <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} disabled={!canEdit} />
+            <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
           </label>
           <label className="inline">
-            <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} disabled={!canEdit} /> Winner gets A$
+            <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} /> Winner gets A$
           </label>
-          <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} disabled={!canEdit} />
+          <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} />
           <span className="meta">from each other player</span>
         </div>
       </div>
@@ -674,8 +450,8 @@ export default function App(){
         <div className="header" style={{marginTop:12}}>
           <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
           <div className="toolbar">
-            <button className="btn secondary" onClick={autoBalance} disabled={!canEdit}>Auto-Balance</button>
-            <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} disabled={!canEdit} /> Override & Save</label>
+            <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
+            <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save</label>
           </div>
         </div>
       ) : (
@@ -686,16 +462,19 @@ export default function App(){
       )}
 
       <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
-        <button className="btn success" onClick={saveGameToHistory} disabled={(Math.abs(totals.diff) > 0.01 && !overrideMismatch) || !canEdit}>End Game & Save</button>
+        <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
       </div>
-    </Section>
+    </div>
   );
 
   const HistorySection = (
-    <Section title="Game Overview (History)">
-      <div className="toolbar">
-        <button className="btn secondary" onClick={exportSeason}>Export CSVs</button>
-        <button className="btn danger" onClick={clearHistory} disabled={!canEdit}>Delete All</button>
+    <div className="surface">
+      <div className="header" style={{marginBottom:0}}>
+        <h3 style={{margin:0}}>Game Overview (History)</h3>
+        <div className="toolbar">
+          <button className="btn secondary" onClick={exportSeason}>Export CSVs</button>
+          <button className="btn danger" onClick={clearHistory}>Delete All</button>
+        </div>
       </div>
       <div className="meta">Tap details to see per-head payments and settlement transfers.</div>
       <table className="table">
@@ -733,7 +512,7 @@ export default function App(){
                   <td className="center">
                     <div className="toolbar" style={{justifyContent:'center'}}>
                       <button className="btn secondary" onClick={()=>setExpanded(e=>({...e,[key]:!e[key]}))}>{expanded[key]?'Hide':'Details'}</button>
-                      <button className="btn danger" onClick={()=>deleteGame(g.id)} disabled={!canEdit}>Delete</button>
+                      <button className="btn danger" onClick={()=>deleteGame(g.id)}>Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -771,7 +550,7 @@ export default function App(){
                                     <tr key={name}>
                                       <td>{name}</td>
                                       <td className="center">
-                                        <select value={rec.method||""} onChange={e=>setPerHeadMethod(g.id,name,e.target.value||null)} disabled={!canEdit}>
+                                        <select value={rec.method||""} onChange={e=>setPerHeadMethod(g.id,name,e.target.value||null)}>
                                           <option value="">—</option>
                                           <option value="cash">Cash</option>
                                           <option value="payid">PayID</option>
@@ -779,7 +558,7 @@ export default function App(){
                                       </td>
                                       <td className="center">
                                         {rec.paid ? <span className="pill">Paid</span> :
-                                          <button className="btn success" onClick={()=>markPerHeadPaid(g.id,name,rec.method||'cash')} disabled={!canEdit}>Mark paid</button>}
+                                          <button className="btn success" onClick={()=>markPerHeadPaid(g.id,name,rec.method||'cash')}>Mark paid</button>}
                                         {overdue && <div className="meta">⚠️ overdue</div>}
                                       </td>
                                       <td className="center mono">{rec.paidAt ? new Date(rec.paidAt).toLocaleString() : '—'}</td>
@@ -817,11 +596,12 @@ export default function App(){
           })}
         </tbody>
       </table>
-    </Section>
+    </div>
   );
 
   const LedgersSection = (
-    <Section title="Player Ledgers (Cumulative)">
+    <div className="surface">
+      <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
       <div className="meta">Clean + collapsible. Tap Show to reveal who they owe / who owes them.</div>
       <table className="table">
         <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Actions</th></tr></thead>
@@ -845,22 +625,22 @@ export default function App(){
                   <tr>
                     <td colSpan="3">
                       <div className="detail">
-                        {(() => {
-                          const sum = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
-                          const oweYou = sum(info.owedBy);
-                          const youOwe = sum(info.owes);
-                          return (
-                            <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
-                              {oweYou > 0 && (
-                                <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
-                              )}
-                              {youOwe > 0 && (
-                                <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
-                              )}
-                            </div>
-                          );
-                        })()}
-                        <table className="table">
+                        
+                          {(() => {
+                            const sum = (arr)=> (arr||[]).reduce((t,x)=> t + Number(x.amount||0), 0);
+                            const oweYou = sum(info.owedBy);
+                            const youOwe = sum(info.owes);
+                            return (
+                              <div className="pp-ledger-row" style={{marginBottom:8, display:"flex", gap:8, flexWrap:"wrap"}}>
+                                {oweYou > 0 && (
+                                  <span className="pp-owe-badge">They owe you <span className="pp-badge-amount">{aud(oweYou)}</span></span>
+                                )}
+                                {youOwe > 0 && (
+                                  <span className="pp-owed-by-badge">You owe them <span className="pp-badge-amount">{aud(youOwe)}</span></span>
+                                )}
+                              </div>
+                            );
+                          })()}<table className="table">
                           <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
                           <tbody>
                             <tr>
@@ -892,11 +672,12 @@ export default function App(){
           })}
         </tbody>
       </table>
-    </Section>
+    </div>
   );
 
   const ProfilesSection = (
-    <Section title="Players & Profiles">
+    <div className="surface">
+      <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
       <div className="meta">Add optional PayIDs so it’s one tap to copy during payouts.</div>
       <table className="table">
         <thead><tr><th>Name</th><th>PayID</th><th className="center">Copy</th></tr></thead>
@@ -908,14 +689,14 @@ export default function App(){
             return (
               <tr key={n}>
                 <td>{n}</td>
-                <td><input type="text" value={v} onChange={e=>setProfiles(p=>({...p,[n]:{payid:e.target.value}}))} placeholder="email/phone PayID" disabled={!canEdit} /></td>
+                <td><input type="text" value={v} onChange={e=>setProfiles(p=>({...p,[n]:{payid:e.target.value}}))} placeholder="email/phone PayID" /></td>
                 <td className="center">{v ? <button className="btn secondary" onClick={()=>copyPayID(n)}>Copy</button> : <span className="meta">—</span>}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
-    </Section>
+    </div>
   );
 
   return (
@@ -929,23 +710,10 @@ export default function App(){
           <span className="meta" style={{marginLeft:8}}>
             <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
             <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
-            <button className="btn ghost small" style={{marginLeft:8}} onClick={forceUnlock}>Force Unlock</button>
           </span>
         </div>
         <div className="pp-hide-mobile">
           <div className="toolbar">
-            <button className="btn secondary" onClick={async()=>{
-              if(!hostLock.active){
-                const pick = await chooseLocker(playerNames);
-                if(!pick) return;
-                setWhoAmIState(pick); setWhoAmI(pick);
-                await apiLockSeason(true, pick);
-              } else {
-                await apiLockSeason(false);
-              }
-            }}>
-              {hostLock.active ? (hostLock.by ? `Unlock (${hostLock.by})` : "Unlock (Host)") : "Activate Host Lock"}
-            </button>
             <div className="switch">
               <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
               <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
@@ -964,19 +732,6 @@ export default function App(){
           <strong>Menu</strong>
           <button className="pp-burger" onClick={()=>setSidebarOpen(false)}>✕</button>
         </div>
-        <div style={{height:8}} />
-        <button className="btn secondary" onClick={async()=>{
-          if(!hostLock.active){
-            const pick = await chooseLocker(playerNames);
-            if(!pick) return;
-            setWhoAmIState(pick); setWhoAmI(pick);
-            await apiLockSeason(true, pick);
-          } else {
-            await apiLockSeason(false);
-          }
-        }} style={{width:'100%'}}>
-          {hostLock.active ? (hostLock.by ? `Unlock (${hostLock.by})` : "Unlock (Host)") : "Activate Host Lock"}
-        </button>
         <div style={{height:8}} />
         <div className="switch">
           <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
@@ -999,7 +754,9 @@ export default function App(){
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
       <div className="container">
+        <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
 
+        {/* Alerts visible on Game & History tabs */}
         {(tab==="game" || tab==="history") && alerts.length>0 && (
           <div className="surface" style={{marginTop:14}}>
             {alerts.map(a=> (
@@ -1015,6 +772,7 @@ export default function App(){
         {tab==="ledgers" && LedgersSection}
         {tab==="profiles" && ProfilesSection}
 
+        {/* Bottom tabbar for quick nav on mobile */}
         <div className="tabbar">
           <button className={"btn " + (tab==='game'?'primary':'secondary')} onClick={()=>setTab('game')}>Game</button>
           <button className={"btn " + (tab==='history'?'primary':'secondary')} onClick={()=>setTab('history')}>History</button>
@@ -1022,7 +780,7 @@ export default function App(){
           <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
         </div>
 
-        <div className="footer meta">Tip: Host Lock makes all devices read-only until unlocked (or next day, Brisbane, on refresh).</div>
+        <div className="footer meta">Tip: “Start New” keeps players, zeroes amounts. Per-head payments are tracked under each game.</div>
       </div>
     </>
   );
