@@ -28,7 +28,7 @@ export default function App(){
   const [perHeadAmount,setPerHeadAmount]=useState(DEFAULT_PERHEAD);
   const [history,setHistory]=useState([]);
   const [cloudVersion,setCloudVersion]=useState(0);
-  const [syncStatus,setSyncStatus]=useState("idle");
+  const [syncStatus,setSyncStatus]=useState("idle"); // "idle" | "syncing" | "upToDate" | "error"
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
   const [theme,setTheme]=useState(()=>localStorage.getItem(THEME) || "dark");
@@ -93,6 +93,18 @@ export default function App(){
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
   }
 
+  // Manual refresh
+  async function refreshSeason(){
+    try{
+      setSyncStatus("syncing");
+      const doc = await apiGetSeason();
+      setHistory(doc.games||[]);
+      setCloudVersion(doc.version||0);
+      setSyncStatus("upToDate");
+    }catch(e){
+      setSyncStatus("error");
+    }
+  }
 
   // Compact mobile: tabs + drawer
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -205,8 +217,18 @@ export default function App(){
         celebrated:false
       } : null
     };
-    try{ const doc = await apiAppendGame(g); setHistory(doc.games||[]); setCloudVersion(doc.version||0); }
-    catch(e){ console.error(e); setHistory(h=>[g,...h]); }
+    try{ 
+      setSyncStatus("syncing");
+      const doc = await apiAppendGame(g); 
+      setHistory(doc.games||[]); 
+      setCloudVersion(doc.version||0); 
+      setSyncStatus("upToDate");
+    }
+    catch(e){ 
+      console.error(e); 
+      setHistory(h=>[g,...h]); 
+      setSyncStatus("error");
+    }
   }
 
   function autoBalance(){
@@ -218,11 +240,14 @@ export default function App(){
     if (window.confirm("Delete this game from history?")) {
       (async()=>{
         try{
+          setSyncStatus("syncing");
           const doc = await apiDeleteGame(id);
           setHistory(doc.games||[]); setCloudVersion(doc.version||0);
+          setSyncStatus("upToDate");
         }catch(e){
           console.error(e);
           setHistory(h=> h.filter(g=> g.id !== id)); // local fallback
+          setSyncStatus("error");
         }
       })();
     }
@@ -681,7 +706,11 @@ export default function App(){
         <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
         <div className="brand">
           <h1>PocketPoker</h1>
-          <span className="badge">Local</span>
+          <span className="badge">Cloud</span>
+          <span className="meta" style={{marginLeft:8}}>
+            <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
+            <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
+          </span>
         </div>
         <div className="pp-hide-mobile">
           <div className="toolbar">
