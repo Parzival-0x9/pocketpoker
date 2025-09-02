@@ -28,7 +28,7 @@ export default function App(){
   const [perHeadAmount,setPerHeadAmount]=useState(DEFAULT_PERHEAD);
   const [history,setHistory]=useState([]);
   const [cloudVersion,setCloudVersion]=useState(0);
-  const [syncStatus,setSyncStatus]=useState("idle"); // "idle" | "syncing" | "upToDate" | "error"
+  const [syncStatus,setSyncStatus]=useState("idle");
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
   const [theme,setTheme]=useState(()=>localStorage.getItem(THEME) || "dark");
@@ -37,6 +37,13 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
+
+  // Host Lock state (server is source of truth)
+  const [hostLock,setHostLock] = useState({ active:false, by:null, until:null, at:null });
+  const [whoAmI, setWhoAmIState] = useState(()=> getWhoAmI() || "");
+  useEffect(()=>{ setWhoAmI(whoAmI || ""); }, [whoAmI]);
+  const playerNames = useMemo(()=> Array.from(new Set((players||[]).map(p=> (p.name||"").trim()).filter(Boolean))), [players]);
+  const canEdit = !hostLock.active || (whoAmI && hostLock.by && whoAmI === hostLock.by);
 
   
   // ---- Cloud API helpers ----
@@ -93,17 +100,49 @@ export default function App(){
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
   }
 
-  // Manual refresh
+
+  
+  // --- Host Lock API + hydration ---
+  function hydrateFromDoc(doc){
+    if(doc && Array.isArray(doc.games)){ setHistory(doc.games); }
+    if(doc && typeof doc.version==='number'){ setCloudVersion(doc.version); }
+    const lock = doc && (doc.lock || {});
+    const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
+    const by = lock.byName || lock.by || lock.user || lock.device || doc.by || null;
+    const until = lock.until || lock.unlockAt || null;
+    const at = lock.at || lock.lockedAt || null;
+    setHostLock({ active, by, until, at });
+  }
+  async function apiLockSeason(locked, byName){
+    const deviceId = getDeviceId();
+    const payload = { seasonId: SEASON_ID, action: locked ? "lock" : "unlock", deviceId };
+    if (locked && byName) payload.byName = byName;
+    const res = await fetch(`${API_BASE}/api/season/lock`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-client-id": deviceId,
+        "x-client-name": byName || hostLock.by || "Unknown",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 423) {
+      const body = await res.json().catch(()=>null);
+      if (body?.lock?.byName) alert(`Game is locked by ${body.lock.byName} on another device.`);
+      if (body) hydrateFromDoc(body);
+      return;
+    }
+    if (!res.ok) { alert(await res.text() || "Failed to toggle Host Lock"); return; }
+    const doc = await res.json().catch(()=>null);
+    if (doc) hydrateFromDoc(doc);
+  }
   async function refreshSeason(){
     try{
       setSyncStatus("syncing");
       const doc = await apiGetSeason();
-      setHistory(doc.games||[]);
-      setCloudVersion(doc.version||0);
+      hydrateFromDoc(doc);
       setSyncStatus("upToDate");
-    }catch(e){
-      setSyncStatus("error");
-    }
+    }catch(e){ setSyncStatus("error"); }
   }
 
   // Compact mobile: tabs + drawer
@@ -141,10 +180,7 @@ export default function App(){
       try{
         setSyncStatus("syncing");
         const doc = await apiGetSeason();
-        if(Array.isArray(doc.games) && doc.games.length>0){
-          setHistory(doc.games);
-        }
-        setCloudVersion(doc.version||0);
+        hydrateFromDoc(doc);
         setSyncStatus("upToDate");
       }catch(e){ setSyncStatus("error"); }
     })();
@@ -155,8 +191,14 @@ export default function App(){
       try{
         const doc = await apiGetSeason();
         if((doc.version||0)!==cloudVersion){
-          setHistory(doc.games||[]);
-          setCloudVersion(doc.version||0);
+          hydrateFromDoc(doc);
+        } else {
+          const lock = doc && (doc.lock || {});
+          const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
+          const curBy = lock.byName || lock.by || null;
+          if(active !== hostLock.active || curBy !== hostLock.by){
+            hydrateFromDoc(doc);
+          }
         }
       }catch(e){ /* ignore transient errors */ }
     }, 10000);
@@ -217,18 +259,8 @@ export default function App(){
         celebrated:false
       } : null
     };
-    try{ 
-      setSyncStatus("syncing");
-      const doc = await apiAppendGame(g); 
-      setHistory(doc.games||[]); 
-      setCloudVersion(doc.version||0); 
-      setSyncStatus("upToDate");
-    }
-    catch(e){ 
-      console.error(e); 
-      setHistory(h=>[g,...h]); 
-      setSyncStatus("error");
-    }
+    try{ const doc = await apiAppendGame(g); setHistory(doc.games||[]); setCloudVersion(doc.version||0); }
+    catch(e){ console.error(e); setHistory(h=>[g,...h]); }
   }
 
   function autoBalance(){
@@ -240,14 +272,11 @@ export default function App(){
     if (window.confirm("Delete this game from history?")) {
       (async()=>{
         try{
-          setSyncStatus("syncing");
           const doc = await apiDeleteGame(id);
           setHistory(doc.games||[]); setCloudVersion(doc.version||0);
-          setSyncStatus("upToDate");
         }catch(e){
           console.error(e);
           setHistory(h=> h.filter(g=> g.id !== id)); // local fallback
-          setSyncStatus("error");
         }
       })();
     }
@@ -706,11 +735,7 @@ export default function App(){
         <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
         <div className="brand">
           <h1>PocketPoker</h1>
-          <span className="badge">Cloud</span>
-          <span className="meta" style={{marginLeft:8}}>
-            <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
-            <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
-          </span>
+          <span className="badge">Local</span>
         </div>
         <div className="pp-hide-mobile">
           <div className="toolbar">
@@ -722,6 +747,23 @@ export default function App(){
               <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
               <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
             </div>
+            <span className="meta" style={{marginLeft:8}}>
+              <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
+              <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
+            </span>
+            <button className="btn secondary" style={{marginLeft:8}} onClick={async()=>{
+              if(!hostLock.active){
+                const pick = await chooseLocker(playerNames);
+                if(!pick) return;
+                setWhoAmIState(pick); setWhoAmI(pick);
+                await apiLockSeason(true, pick);
+              } else {
+                await apiLockSeason(false);
+              }
+            }}>
+              {hostLock.active ? (hostLock.by ? `Unlock (${hostLock.by})` : "Unlock") : "Activate Host Lock"}
+            </button>
+
           </div>
         </div>
       </div>
@@ -754,6 +796,17 @@ export default function App(){
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
       <div className="container">
+        {(hostLock.active && (!whoAmI || whoAmI !== hostLock.by)) && (
+          <div title="Host Lock: read-only"
+               style={{position:"absolute",left:0,right:0,top:0,bottom:0,background:"transparent",pointerEvents:"auto"}}>
+            <div style={{position:"absolute",inset:0,borderRadius:18,background:"rgba(0,0,0,.12)"}} />
+            <div style={{position:"fixed",top:86,right:10,background:"rgba(0,0,0,.65)",color:"#fff",padding:"6px 10px",
+                         borderRadius:12,border:"1px solid rgba(255,255,255,.15)",fontSize:12}}>
+              🔒 Read-only{hostLock.by?` (locked by ${hostLock.by})`:''}
+            </div>
+          </div>
+        )}
+
         <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
 
         {/* Alerts visible on Game & History tabs */}
