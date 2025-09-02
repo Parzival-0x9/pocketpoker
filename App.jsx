@@ -1,17 +1,10 @@
 import React, { useMemo, useState, useEffect } from "react";
-import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
-import { chooseLocker, getWhoAmI, setWhoAmI } from "./api/season/lock.js";
+import PlayerRow from "./PlayerRow.jsx";
+import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./calc.js";
 
-// --- Cloud sync (Upstash via Vercel API) ---
-const API_BASE = ""; // same origin
-const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
-
-const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
-const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
-
-const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
-const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
+// ===============================
+// Inline helpers (no extra files)
+// ===============================
 
 // persistent device id (per browser) for lock API
 const DEVICE_KEY = "pp_device";
@@ -28,10 +21,85 @@ function getDeviceId() {
   }
 }
 
-function useCountdownToFriday(){
+// who-am-I helpers (stored locally)
+const WHOAMI_KEY = "pp_whoami";
+function getWhoAmI(){
+  try{ return localStorage.getItem(WHOAMI_KEY) || ""; }catch{ return ""; }
+}
+function setWhoAmI(name){
+  try{
+    if(name) localStorage.setItem(WHOAMI_KEY, String(name));
+    else localStorage.removeItem(WHOAMI_KEY);
+  }catch{}
+}
+
+// simple modal picker to choose a locker from current players
+function chooseLocker(names){
+  if(!Array.isArray(names) || names.length===0){
+    const v = window.prompt("No named players yet. Enter a name to lock as:");
+    return Promise.resolve(v && v.trim() ? v.trim() : null);
+  }
+  return new Promise((resolve)=>{
+    const root = document.createElement("div");
+    root.className = "pp-choose-locker-root";
+    root.innerHTML = `
+      <div class="ppcl-backdrop"></div>
+      <div class="ppcl-card">
+        <div class="ppcl-title">Activate Host Lock</div>
+        <div class="ppcl-list">
+          ${names.map(n=>`<button class="ppcl-opt" data-name="${n}">${n}</button>`).join("")}
+        </div>
+        <div class="ppcl-actions">
+          <button class="ppcl-cancel">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(root);
+
+    const cleanup = (val=null)=>{ root.remove(); resolve(val); };
+    root.querySelector(".ppcl-backdrop").addEventListener("click", ()=>cleanup(null));
+    root.querySelector(".ppcl-cancel").addEventListener("click", ()=>cleanup(null));
+    root.querySelectorAll(".ppcl-opt").forEach(btn=> btn.addEventListener("click", ()=> cleanup(btn.dataset.name)));
+  });
+}
+// inject minimal styles for the picker (string added to head)
+(function injectLockerStyles(){
+  const css = `
+  .pp-choose-locker-root{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center}
+  .ppcl-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+  .ppcl-card{position:relative;background:var(--surface,#1f2937);color:inherit;border-radius:14px;padding:14px;width:min(92vw,420px);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+  .ppcl-title{font-weight:700;margin-bottom:8px}
+  .ppcl-list{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;max-height:240px;overflow:auto}
+  .ppcl-opt{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);cursor:pointer}
+  .ppcl-opt:hover{filter:brightness(1.1)}
+  .ppcl-actions{display:flex;justify-content:flex-end;margin-top:10px}
+  .ppcl-cancel{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:transparent;color:inherit;cursor:pointer}
+  `;
+  try{ const style=document.createElement("style"); style.textContent=css; document.head.appendChild(style); }catch{}
+})();
+
+// ===============================
+// App constants & state helpers
+// ===============================
+
+// --- Cloud sync (Upstash via Vercel API) ---
+const API_BASE = ""; // same origin
+const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
+
+const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
+const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
+const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
+const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
+
+// 8:30 PM Friday countdown (local)
+function useCountdownToFriday830(){
   const [now,setNow]=useState(Date.now());
   useEffect(()=>{ const i=setInterval(()=>setNow(Date.now()),1000); return ()=>clearInterval(i); },[]);
-  const due = new Date(nextFridayISO()); const diff = Math.max(0, due.getTime()-now);
+  const cur = new Date(now);
+  const day = cur.getDay(); // 0 Sun .. 6 Sat
+  let add = (5 - day + 7) % 7;
+  if (add === 0) add = 7; // always the NEXT Friday
+  const due = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + add, 20, 30, 0, 0); // 20:30
+  const diff = Math.max(0, due.getTime()-now);
   const days=Math.floor(diff/86400000); const hrs=Math.floor((diff%86400000)/3600000);
   const mins=Math.floor((diff%3600000)/60000); const secs=Math.floor((diff%60000)/1000);
   return { due, days, hrs, mins, secs };
@@ -157,7 +225,8 @@ export default function App(){
     if (doc) hydrateFromDoc(doc);
     else setHostLock(s=>({ ...s, active: locked, by: locked ? (byName||s.by) : null }));
   }
-  // Force unlock (for admins / emergencies). Server must allow unconditional unlock.
+
+  // Force unlock (for emergencies). Requires server support.
   async function forceUnlock(){
     try{
       const deviceId = getDeviceId();
@@ -190,14 +259,13 @@ export default function App(){
     }
   }
 
-
   // Merge server doc into local UI state
   function hydrateFromDoc(doc){
     if(doc && Array.isArray(doc.games)){ setHistory(doc.games); }
     if(doc && typeof doc.version==='number'){ setCloudVersion(doc.version); }
     const lock = doc && (doc.lock || {});
     const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
-    const by = lock.by || lock.byName || lock.user || lock.device || doc.by || null;
+    const by = lock.byName || lock.by || lock.user || lock.device || doc.by || null;
     const until = lock.until || lock.unlockAt || null;
     const at = lock.at || lock.lockedAt || null;
     setHostLock({ active, by, until, at });
@@ -241,7 +309,7 @@ export default function App(){
     localStorage.setItem(PROFILES, JSON.stringify(profiles));
   }, [profiles]);
 
-  const {due,days,hrs,mins,secs} = useCountdownToFriday();
+  const {days,hrs,mins,secs} = useCountdownToFriday830();
 
   // Load season on mount + polling
   useEffect(()=>{
@@ -263,7 +331,8 @@ export default function App(){
         }else{
           const lock = doc && (doc.lock || {});
           const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
-          if(active !== hostLock.active || (lock.by||lock.byName||null) !== hostLock.by){
+          const curBy = lock.byName || lock.by || null;
+          if(active !== hostLock.active || curBy !== hostLock.by){
             hydrateFromDoc(doc);
           }
         }
@@ -308,7 +377,7 @@ export default function App(){
 
   async function saveGameToHistory(){
     const stamp = new Date().toISOString();
-    const perHeadDue = nextFridayISO(stamp);
+    const perHeadDue = nextFridayISO(stamp); // keep server-side convention; banner uses 8:30pm but due can be from calc.js
     const perHeadPayments = {};
     totals.perHeadPayers.forEach(n=> perHeadPayments[n] = { paid:false, method:null, paidAt:null });
     const g={ id:uid(), stamp,
@@ -506,14 +575,24 @@ export default function App(){
 
   // Read-only wrapper when host locked (only blocks if you're NOT the locker)
   function Section({children, title}){
+    const lockedForMe = (hostLock.active && (!whoAmI || whoAmI !== hostLock.by));
     return (
-      <div className="surface pp-guard" style={{position:'relative'}}>
+      <div className="surface" style={{position:'relative'}}>
         {title ? <div className="header" style={{marginBottom:0}}><h3 style={{margin:0}}>{title}</h3></div> : null}
         {children}
-        {(hostLock.active && (!whoAmI || whoAmI !== hostLock.by)) && (
-          <div className="pp-ro" title="Host Lock: read-only">
-            <div className="pp-ro-badge">🔒 Read-only (Host Lock{hostLock.by?` by ${hostLock.by}`:''})</div>
-          </div>
+        {lockedForMe && (
+          <>
+            <div
+              title="Host Lock: read-only"
+              style={{position:'absolute', inset:0, background:'rgba(0,0,0,.12)', borderRadius:18, pointerEvents:'auto'}}
+            />
+            <div
+              style={{position:'absolute', top:10, right:10, background:'rgba(0,0,0,.65)', color:'#fff', padding:'6px 10px',
+                      borderRadius:12, border:'1px solid rgba(255,255,255,.15)', fontSize:12}}
+            >
+              🔒 Read-only (Host Lock{hostLock.by?` by ${hostLock.by}`:''})
+            </div>
+          </>
         )}
       </div>
     );
@@ -522,6 +601,30 @@ export default function App(){
   // --- Section UIs ---
   const GameSection = (
     <Section>
+      {/* Next game banner */}
+      <div
+        style={{
+          display:'flex', alignItems:'center', gap:10, flexWrap:'wrap', margin:'12px 0 14px 0',
+          padding:'10px 12px', border:'1px solid rgba(255,255,255,.08)',
+          background:'rgba(255,255,255,.04)', borderRadius:12
+        }}
+      >
+        <div style={{fontSize:14, lineHeight:1.3}}>
+          Next Friday at <strong>8:30pm</strong> in{" "}
+          <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙{" "}
+          {whoAmI ? (
+            <span className="meta">
+              (You are {whoAmI}{hostLock.active && whoAmI===hostLock.by ? " • editor" : ""})
+            </span>
+          ) : null}
+          {hostLock.active ? (
+            <span className="badge" style={{ marginLeft: 8 }}>
+              🔒 Locked{hostLock.by ? ` by ${hostLock.by}` : ""}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
       <div className="controls">
         <div className="stack">
           <button className="btn primary" onClick={startGame} disabled={!canEdit}>Start New</button>
@@ -896,10 +999,6 @@ export default function App(){
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
       <div className="container">
-        <div className="kicker">
-          Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙 {whoAmI ? `(You are ${whoAmI}${hostLock.active && whoAmI===hostLock.by ? " • editor" : ""})` : ""}
-          {hostLock.active && <span className="badge" style={{marginLeft:8}}>🔒 Locked{hostLock.by?` by ${hostLock.by}`:''}</span>}
-        </div>
 
         {(tab==="game" || tab==="history") && alerts.length>0 && (
           <div className="surface" style={{marginTop:14}}>
@@ -925,14 +1024,6 @@ export default function App(){
 
         <div className="footer meta">Tip: Host Lock makes all devices read-only until unlocked (or next day, Brisbane, on refresh).</div>
       </div>
-
-      {/* lightweight CSS for the read-only overlay */}
-      <style>{`
-        .pp-guard{position:relative}
-        .pp-ro{position:absolute;inset:0;background:transparent;pointer-events:auto}
-        .pp-ro::after{content:'';position:absolute;inset:0;border-radius:18px;background:rgba(0,0,0,.12)}
-        .pp-ro-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.65);color:#fff;padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.15);font-size:12px}
-      `}</style>
     </>
   );
 }
