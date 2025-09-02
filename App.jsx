@@ -1,6 +1,42 @@
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
+
+// === Deterministic equal-split per-loser (cap & redistribute; ignores prize) ===
+function settleEqualSplitCapped(rows){
+  // rows: [{name, net}] where net > 0 = winner, net < 0 = loser
+  const winnersBase = rows.filter(r=> r.net > 0.0001).map(r=>({ name: (r.name||"Player"), need: round2(r.net) }));
+  const losersBase  = rows.filter(r=> r.net < -0.0001).map(r=>({ name: (r.name||"Player"), loss: round2(-r.net) }));
+  const txns = [];
+  if (!winnersBase.length || !losersBase.length) return txns;
+  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name));
+  const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name));
+  const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
+  losersSorted.forEach(L => {
+    let remaining = round2(L.loss);
+    while (remaining > 0.0001) {
+      const eligible = getEligible(); if (!eligible.length) break;
+      const equalRaw = remaining / eligible.length; // each winner gets equal share of this loser's loss
+      let distributed = 0;
+      for (let i = 0; i < eligible.length; i++) {
+        const w = eligible[i];
+        const isLast = i === eligible.length - 1;
+        const shareTarget = Math.min(equalRaw, w.need);
+        let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
+        give = Math.min(give, round2(w.need), round2(remaining - distributed));
+        if (give > 0.0001) {
+          txns.push({ from: L.name, to: w.name, amount: round2(give) });
+          w.need = round2(w.need - give);
+          distributed = round2(distributed + give);
+        }
+      }
+      remaining = round2(remaining - distributed);
+      if (distributed <= 0.0001) break;
+    }
+  });
+  return txns;
+}
+// === End equal-split ===
 // --- Cloud sync (Upstash via Vercel API) ---
 const API_BASE = ""; // same origin
 const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
@@ -186,8 +222,9 @@ export default function App(){
     const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
     const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
-    const txns = settle(adjusted.map(p=>({ name: p.name || "Player", net: p.netAdj })));
-    const sorted = [...adjusted].sort((a,b)=>b.net-a.net);
+    const basis = adjusted.map(p=>({ name: p.name || "Player", net: round2(p.net) }));
+    const txns = settleEqualSplitCapped(basis);
+const sorted = [...adjusted].sort((a,b)=>b.net-a.net);
     const winner = sorted.length ? sorted[0] : null;
     const perHeadPayers = winner ? adjusted.filter(p=>p.id!==winner.id).map(p=>p.name||"Player") : [];
     return { adjusted, top, buyInSum, cashAdjSum, diff, txns, winner, perHeadPayers };
