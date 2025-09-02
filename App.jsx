@@ -7,22 +7,6 @@ const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON
 const PIN_KEY = "pp_season_key"; // reserved for future PIN gate
 
 
-
-// --- Host Lock helpers (2B minimal) ---
-const DEVICE_KEY = "pp_device";
-function getDeviceId() {
-  try {
-    let id = localStorage.getItem(DEVICE_KEY);
-    if (!id) {
-      id = (crypto?.randomUUID?.() || Math.random().toString(36).slice(2)) + "-" + Date.now().toString(36);
-      localStorage.setItem(DEVICE_KEY, id);
-    }
-    return id;
-  } catch {
-    return "unknown";
-  }
-}
-const WHOAMI_KEY = "pp_whoami";
 const DEFAULT_BUYIN=50, DEFAULT_PERHEAD=20, uid=()=>Math.random().toString(36).slice(2,9);
 const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
@@ -44,7 +28,7 @@ export default function App(){
   const [perHeadAmount,setPerHeadAmount]=useState(DEFAULT_PERHEAD);
   const [history,setHistory]=useState([]);
   const [cloudVersion,setCloudVersion]=useState(0);
-  const [syncStatus,setSyncStatus]=useState("idle");
+  const [syncStatus,setSyncStatus]=useState("idle"); // "idle" | "syncing" | "upToDate" | "error"
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
   const [theme,setTheme]=useState(()=>localStorage.getItem(THEME) || "dark");
@@ -53,14 +37,6 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
-  // Host Lock (2B)
-  const [hostLock, setHostLock] = useState({ active:false, by:null, until:null });
-  const [whoAmI, setWhoAmI] = useState(()=> { try { return localStorage.getItem(WHOAMI_KEY) || ""; } catch { return ""; } });
-  useEffect(()=>{ try{ if(whoAmI) localStorage.setItem(WHOAMI_KEY, whoAmI); else localStorage.removeItem(WHOAMI_KEY);}catch{} }, [whoAmI]);
-  const playerNames = useMemo(()=> Array.from(new Set((players||[]).map(p=> (p.name||"").trim()).filter(Boolean))), [players]);
-  const canEdit = !hostLock.active || (whoAmI && hostLock.by && whoAmI===hostLock.by);
-  const [lockPickerOpen, setLockPickerOpen] = useState(false);
-
 
   
   // ---- Cloud API helpers ----
@@ -112,51 +88,23 @@ export default function App(){
         if(!res2.ok) throw new Error(await res2.text());
         return await res2.json();
       }
- 
-  // --- Host Lock API & helpers ---
-  function hydrateLockFromDoc(doc){
-    const lock = doc && (doc.lock || {});
-    const active = !!(lock.active ?? lock.locked ?? doc.locked ?? false);
-    const by = lock.byName || lock.by || lock.user || lock.device || doc.by || null;
-    const until = lock.until || lock.unlockAt || null;
-    setHostLock({ active, by, until });
-  }
-
-  async function apiLockSeason(locked, byName){
-    const deviceId = getDeviceId();
-    const payload = { seasonId: SEASON_ID, action: locked ? "lock" : "unlock", deviceId };
-    if (locked && byName) payload.byName = byName;
-
-    const res = await fetch(`${API_BASE}/api/season/lock`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-client-id": deviceId,
-        "x-client-name": byName || whoAmI || hostLock.by || "Unknown",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    if (res.status === 423) {
-      const doc = await res.json().catch(()=>null);
-      if(doc) hydrateLockFromDoc(doc);
-      alert(doc?.lock?.byName ? `Game is locked by ${doc.lock.byName} on another device.` : "Game is locked on another device.");
-      return;
-    }
-    if (!res.ok) {
-      const msg = await res.text().catch(()=>null);
-      alert(msg || "Failed to toggle Host Lock");
-      return;
-    }
-    const doc = await res.json().catch(()=>null);
-    if (doc) hydrateLockFromDoc(doc);
-    if (locked && byName) setWhoAmI(byName);
-  }
-     if(!res.ok) throw new Error(await res.text());
+      if(!res.ok) throw new Error(await res.text());
       return await res.json();
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
   }
 
+  // Manual refresh
+  async function refreshSeason(){
+    try{
+      setSyncStatus("syncing");
+      const doc = await apiGetSeason();
+      setHistory(doc.games||[]);
+      setCloudVersion(doc.version||0);
+      setSyncStatus("upToDate");
+    }catch(e){
+      setSyncStatus("error");
+    }
+  }
 
   // Compact mobile: tabs + drawer
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -193,7 +141,6 @@ export default function App(){
       try{
         setSyncStatus("syncing");
         const doc = await apiGetSeason();
-        hydrateLockFromDoc(doc);
         if(Array.isArray(doc.games) && doc.games.length>0){
           setHistory(doc.games);
         }
@@ -210,7 +157,6 @@ export default function App(){
         if((doc.version||0)!==cloudVersion){
           setHistory(doc.games||[]);
           setCloudVersion(doc.version||0);
-        hydrateLockFromDoc(doc);
         }
       }catch(e){ /* ignore transient errors */ }
     }, 10000);
@@ -271,8 +217,18 @@ export default function App(){
         celebrated:false
       } : null
     };
-    try{ const doc = await apiAppendGame(g); setHistory(doc.games||[]); setCloudVersion(doc.version||0); }
-    catch(e){ console.error(e); setHistory(h=>[g,...h]); }
+    try{ 
+      setSyncStatus("syncing");
+      const doc = await apiAppendGame(g); 
+      setHistory(doc.games||[]); 
+      setCloudVersion(doc.version||0); 
+      setSyncStatus("upToDate");
+    }
+    catch(e){ 
+      console.error(e); 
+      setHistory(h=>[g,...h]); 
+      setSyncStatus("error");
+    }
   }
 
   function autoBalance(){
@@ -284,11 +240,14 @@ export default function App(){
     if (window.confirm("Delete this game from history?")) {
       (async()=>{
         try{
+          setSyncStatus("syncing");
           const doc = await apiDeleteGame(id);
           setHistory(doc.games||[]); setCloudVersion(doc.version||0);
+          setSyncStatus("upToDate");
         }catch(e){
           console.error(e);
           setHistory(h=> h.filter(g=> g.id !== id)); // local fallback
+          setSyncStatus("error");
         }
       })();
     }
@@ -491,14 +450,6 @@ export default function App(){
         <div className="header" style={{marginTop:12}}>
           <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
           <div className="toolbar">
-            <button className="btn secondary" onClick={()=>{
-              if(!hostLock.active){
-                setLockPickerOpen(true);
-              } else {
-                apiLockSeason(false);
-              }
-            }}>{hostLock.active ? (hostLock.by ? `Unlock (${hostLock.by})` : 'Unlock') : 'Activate Host Lock'}</button>
-
             <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
             <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save</label>
           </div>
@@ -755,7 +706,11 @@ export default function App(){
         <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
         <div className="brand">
           <h1>PocketPoker</h1>
-          <span className="badge">Local</span>
+          <span className="badge">Cloud</span>
+          <span className="meta" style={{marginLeft:8}}>
+            <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
+            <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
+          </span>
         </div>
         <div className="pp-hide-mobile">
           <div className="toolbar">
@@ -798,11 +753,7 @@ export default function App(){
       </div>
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
-      <div className="container" style={{position:"relative"}}>
-        {(hostLock.active && (!whoAmI || whoAmI !== hostLock.by)) && (
-          <div title="Host Lock: read-only" style={{position:"absolute", inset:0, borderRadius:18, background:"rgba(0,0,0,.12)", zIndex:5}} />
-        )}
-
+      <div className="container">
         <div className="kicker">Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙</div>
 
         {/* Alerts visible on Game & History tabs */}
@@ -831,27 +782,6 @@ export default function App(){
 
         <div className="footer meta">Tip: “Start New” keeps players, zeroes amounts. Per-head payments are tracked under each game.</div>
       </div>
-    
-      {lockPickerOpen && (
-        <div style={{position:'fixed', inset:0, zIndex:2000}}>
-          <div onClick={()=>setLockPickerOpen(false)} style={{position:'absolute', inset:0, background:'rgba(0,0,0,.45)'}} />
-          <div style={{position:'relative', margin:'10vh auto', background:'var(--surface,#1f2937)', color:'inherit', borderRadius:14, padding:14, width:'min(92vw,420px)', boxShadow:'0 10px 30px rgba(0,0,0,.3)'}}>
-            <div style={{fontWeight:700, marginBottom:8}}>Activate Host Lock</div>
-            {(playerNames.length===0) ? (
-              <div className="meta">Add player names first.</div>
-            ) : (
-              <div style={{display:'flex', flexWrap:'wrap', gap:8, margin:'6px 0', maxHeight:240, overflow:'auto'}}>
-                {playerNames.map(n => (
-                  <button key={n} className="btn secondary" onClick={()=>{ setLockPickerOpen(false); apiLockSeason(true, n); }} style={{padding:'8px 12px', borderRadius:10}}>{n}</button>
-                ))}
-              </div>
-            )}
-            <div style={{display:'flex', justifyContent:'flex-end', marginTop:10}}>
-              <button className="btn ghost" onClick={()=>setLockPickerOpen(false)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-</>
+    </>
   );
 }
