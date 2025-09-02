@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
-import { chooseLocker, getWhoAmI, setWhoAmI } from "./lib/lock.js";
+import { chooseLocker, getWhoAmI, setWhoAmI } from "./api/season/lock.js";
 
 // --- Cloud sync (Upstash via Vercel API) ---
 const API_BASE = ""; // same origin
@@ -522,9 +522,6 @@ export default function App(){
   // --- Section UIs ---
   const GameSection = (
     <Section>
-      <div className="pp-nextgame-banner">
-        <div className="pp-nextgame-text">Next Friday at <strong>8:30pm</strong> in {days}d {hrs}h {mins}m {secs}s — get your $20 ready. 🪙 {whoAmI ? `(You are ${whoAmI}${hostLock.active && whoAmI===hostLock.by ? " • editor" : ""})` : ""}{hostLock.active ? `  🔒 Locked${hostLock.by?` by ${hostLock.by}`:""}` : ""}</div>
-      </div>
       <div className="controls">
         <div className="stack">
           <button className="btn primary" onClick={startGame} disabled={!canEdit}>Start New</button>
@@ -899,7 +896,12 @@ export default function App(){
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
       <div className="container">
-{(tab==="game" || tab==="history") && alerts.length>0 && (
+        <div className="kicker">
+          Next Friday at 5pm in <strong>{days}d {hrs}h {mins}m {secs}s</strong> — get your $20 ready. 🪙 {whoAmI ? `(You are ${whoAmI}${hostLock.active && whoAmI===hostLock.by ? " • editor" : ""})` : ""}
+          {hostLock.active && <span className="badge" style={{marginLeft:8}}>🔒 Locked{hostLock.by?` by ${hostLock.by}`:''}</span>}
+        </div>
+
+        {(tab==="game" || tab==="history") && alerts.length>0 && (
           <div className="surface" style={{marginTop:14}}>
             {alerts.map(a=> (
               <div key={a.id} className="alert" style={{marginBottom:8}}>
@@ -924,15 +926,7 @@ export default function App(){
         <div className="footer meta">Tip: Host Lock makes all devices read-only until unlocked (or next day, Brisbane, on refresh).</div>
       </div>
 
-      {
-      {/* banner styles */}
-      <style>{`
-        .pp-nextgame-banner{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 14px 0;padding:10px 12px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);border-radius:12px}
-        .pp-nextgame-text{font-size:14px;line-height:1.3}
-        @media (max-width: 560px){ .pp-nextgame-text{font-size:13px} }
-      `}</style>
-    
-      /* lightweight CSS for the read-only overlay */}
+      {/* lightweight CSS for the read-only overlay */}
       <style>{`
         .pp-guard{position:relative}
         .pp-ro{position:absolute;inset:0;background:transparent;pointer-events:auto}
