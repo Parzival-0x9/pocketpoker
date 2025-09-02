@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./lib/calc.js"; // stop importing nextFridayISO and compute 8:30pm locally
+import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
 
 // --- Cloud sync (Upstash via Vercel API) ---
 const API_BASE = ""; // same origin
@@ -11,22 +11,18 @@ const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state",
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
-// Compute next Friday 8:30 PM local time (Brisbane is UTC+10, no DST).
+// Compute next Friday 8:30 PM local time
 function nextFriday830ISO(fromISO){
   const base = fromISO ? new Date(fromISO) : new Date();
   const d = new Date(base);
-  // set to 20:30:00 local
   d.setSeconds(0,0);
   const day = d.getDay(); // 0=Sun ... 5=Fri
-  const daysUntilFriday = (5 - day + 7) % 7 || (d.getHours() > 20 || (d.getHours()===20 && d.getMinutes()>30) ? 7 : 0);
-  // jump to Friday of this/next week
+  const isAfter830 = d.getHours() > 20 || (d.getHours()===20 && d.getMinutes() >= 30);
+  let addDays = (5 - day + 7) % 7;
+  if (addDays === 0 && isAfter830) addDays = 7;
   const target = new Date(d);
-  target.setDate(d.getDate() + daysUntilFriday);
+  target.setDate(d.getDate() + addDays);
   target.setHours(20,30,0,0);
-  // if today is Friday but time passed, push a week
-  if(day === 5 && (d.getHours() > 20 || (d.getHours()===20 && d.getMinutes() >= 30))){
-    target.setDate(target.getDate()+7);
-  }
   return target.toISOString();
 }
 
@@ -115,10 +111,13 @@ export default function App(){
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
   }
   async function apiLockSeason(locked, by){
+    // Send both 'locked' and 'action' to be compatible with different server implementations
+    const payload = { seasonId: SEASON_ID, locked, action: locked ? "lock" : "unlock" };
+    if (by) payload.by = by;
     const res = await fetch(`${API_BASE}/api/season/lock`, {
       method: "POST",
       headers: { "Content-Type":"application/json" },
-      body: JSON.stringify({ seasonId: SEASON_ID, locked, by })
+      body: JSON.stringify(payload)
     });
     if(!res.ok){
       const msg = await res.text();
@@ -462,6 +461,12 @@ export default function App(){
   // --- Section UIs ---
   const GameSection = (
     <Section>
+      {/* Kicker banner: above Start/Add/Reset */}
+      <div className="kicker-banner">
+        <span>Every Friday <strong>8:30 PM</strong> — next in <strong>{days}d {hrs}h {mins}m {secs}s</strong>.</span>
+        {hostLock.active && <span className="badge" style={{marginLeft:8}}>🔒 Locked{hostLock.by?` by ${hostLock.by}`:''}</span>}
+      </div>
+
       <div className="controls">
         <div className="stack">
           <button className="btn primary" onClick={startGame} disabled={hostLock.active}>Start New</button>
@@ -852,14 +857,6 @@ export default function App(){
       </div>
       <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
 
-      {/* Kicker visible on all viewports */}
-      <div className="surface kicker-card">
-        <div className="kicker-line">
-          Every Friday <strong>8:30 PM</strong> — next in <strong>{days}d {hrs}h {mins}m {secs}s</strong>.
-          {hostLock.active && <span className="badge" style={{marginLeft:8}}>🔒 Locked{hostLock.by?` by ${hostLock.by}`:''}</span>}
-        </div>
-      </div>
-
       <div className="container">
         {/* Alerts visible on Game & History tabs */}
         {(tab==="game" || tab==="history") && alerts.length>0 && (
@@ -897,9 +894,8 @@ export default function App(){
         .pp-ro{position:absolute;inset:0;background:transparent;pointer-events:auto}
         .pp-ro::after{content:'';position:absolute;inset:0;border-radius:18px;background:rgba(0,0,0,.12)}
         .pp-ro-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.65);color:#fff;padding:6px 10px;border-radius:12px;border:1px solid rgba(255,255,255,.15);font-size:12px}
-        .kicker-card{margin:12px auto 0; max-width:1100px; padding:10px 14px;}
-        .kicker-line{font-size:14px; line-height:1.4}
-        @media(min-width:768px){ .kicker-line{font-size:16px} }
+        .kicker-banner{margin:6px 0 14px; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.04); font-size:15px}
+        @media(min-width:768px){ .kicker-banner{font-size:16px} }
         /* Modal */
         .pp-modal{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.4); z-index:5000}
         .pp-modal-card{background:var(--surface,#1f2937); border-radius:16px; padding:16px; width:min(92vw,420px); box-shadow:0 10px 30px rgba(0,0,0,.3)}
