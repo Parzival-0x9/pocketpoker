@@ -1,6 +1,80 @@
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./lib/calc.js";
+
+// ===== Host Lock helpers (2B minimal) =====
+
+// persistent device id (per browser) for lock API
+const DEVICE_KEY = "pp_device";
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = (crypto?.randomUUID?.() || Math.random().toString(36).slice(2)) + "-" + Date.now().toString(36);
+      localStorage.setItem(DEVICE_KEY, id);
+    }
+    return id;
+  } catch {
+    return "unknown";
+  }
+}
+
+// who-am-I helpers (stored locally)
+const WHOAMI_KEY = "pp_whoami";
+function getWhoAmI(){
+  try{ return localStorage.getItem(WHOAMI_KEY) || ""; }catch{ return ""; }
+}
+function setWhoAmI(name){
+  try{
+    if(name) localStorage.setItem(WHOAMI_KEY, String(name));
+    else localStorage.removeItem(WHOAMI_KEY);
+  }catch{}
+}
+
+// simple modal picker to choose a locker from current players
+function chooseLocker(names){
+  if(!Array.isArray(names) || names.length===0){
+    const v = window.prompt("No named players yet. Enter a name to lock as:");
+    return Promise.resolve(v && v.trim() ? v.trim() : null);
+  }
+  return new Promise((resolve)=>{
+    const root = document.createElement("div");
+    root.className = "pp-choose-locker-root";
+    root.innerHTML = `
+      <div class="ppcl-backdrop"></div>
+      <div class="ppcl-card">
+        <div class="ppcl-title">Activate Host Lock</div>
+        <div class="ppcl-list">
+          ${names.map(n=>`<button class="ppcl-opt" data-name="${n}">${n}</button>`).join("")}
+        </div>
+        <div class="ppcl-actions">
+          <button class="ppcl-cancel">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(root);
+
+    const cleanup = (val=null)=>{ root.remove(); resolve(val); };
+    root.querySelector(".ppcl-backdrop").addEventListener("click", ()=>cleanup(null));
+    root.querySelector(".ppcl-cancel").addEventListener("click", ()=>cleanup(null));
+    root.querySelectorAll(".ppcl-opt").forEach(btn=> btn.addEventListener("click", ()=> cleanup(btn.dataset.name)));
+  });
+}
+// inject minimal styles for the picker
+(function injectLockerStyles(){
+  const css = `
+  .pp-choose-locker-root{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center}
+  .ppcl-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+  .ppcl-card{position:relative;background:var(--surface,#1f2937);color:inherit;border-radius:14px;padding:14px;width:min(92vw,420px);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+  .ppcl-title{font-weight:700;margin-bottom:8px}
+  .ppcl-list{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;max-height:240px;overflow:auto}
+  .ppcl-opt{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);cursor:pointer}
+  .ppcl-opt:hover{filter:brightness(1.1)}
+  .ppcl-actions{display:flex;justify-content:flex-end;margin-top:10px}
+  .ppcl-cancel{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:transparent;color:inherit;cursor:pointer}
+  `;
+  try{ const style=document.createElement("style"); style.textContent=css; document.head.appendChild(style); }catch{}
+})();
+
 // --- Cloud sync (Upstash via Vercel API) ---
 const API_BASE = ""; // same origin
 const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
@@ -24,18 +98,27 @@ function useCountdownToFriday(){
 export default function App(){
   const [players,setPlayers]=useState([blank(),blank()]);
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
+  useEffect(()=>{ try{ window.__pp_buyInAmount = buyInAmount; }catch{} }, [buyInAmount]);
   const [applyPerHead,setApplyPerHead]=useState(false);
   const [perHeadAmount,setPerHeadAmount]=useState(DEFAULT_PERHEAD);
   const [history,setHistory]=useState([]);
   const [cloudVersion,setCloudVersion]=useState(0);
-  const [syncStatus,setSyncStatus]=useState("idle"); // "idle" | "syncing" | "upToDate" | "error"
+  const [syncStatus,setSyncStatus]=useState("idle");
   const [started,setStarted]=useState(false);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
   const [theme,setTheme]=useState(()=>localStorage.getItem(THEME) || "dark");
   const [felt,setFelt]=useState(()=>localStorage.getItem(FELT) || "emerald");
   const [expanded,setExpanded]=useState({});
   const [ledgerExpanded,setLedgerExpanded]=useState({});
-  const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
+  
+  // Host Lock
+  const [hostLock,setHostLock] = useState({ active:false, by:null, until:null, at:null });
+  const [whoAmI, setWhoAmIState] = useState(()=> getWhoAmI() || "");
+  useEffect(()=>{ setWhoAmI(whoAmI || ""); }, [whoAmI]);
+
+  const playerNames = useMemo(()=> Array.from(new Set((players||[]).map(p=> (p.name||"").trim()).filter(Boolean))), [players]);
+  const canEdit = !hostLock.active || (whoAmI && hostLock.by && whoAmI === hostLock.by);
+const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [celebrated, setCelebrated] = useState(new Set());
 
   
@@ -58,6 +141,8 @@ export default function App(){
         // fetch latest and retry once
         const doc = await apiGetSeason();
         setHistory(doc.games||[]); setCloudVersion(doc.version||0);
+        const lock = doc.lock || null;
+        setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
         const res2 = await fetch(`${API_BASE}/api/season/append-game`, {
           method: "POST",
           headers: { "Content-Type":"application/json", "If-Match": String(doc.version||0) },
@@ -91,20 +176,75 @@ export default function App(){
       if(!res.ok) throw new Error(await res.text());
       return await res.json();
     }catch(e){ console.error("apiDeleteGame", e); throw e; }
+  
+
+  // Host Lock API
+  async function apiLockSeason(locked, byName){
+    const deviceId = getDeviceId();
+    const payload = {
+      seasonId: SEASON_ID,
+      action: locked ? "lock" : "unlock",
+      deviceId,
+    };
+    if (locked && byName) payload.byName = byName;
+
+    const res = await fetch(`${API_BASE}/api/season/lock`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-client-id": deviceId,
+        "x-client-name": byName || hostLock.by || "Unknown",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.status === 423) {
+      const doc = await res.json().catch(() => null);
+      if (doc?.lock?.byName) {
+        alert(`Game is locked by ${doc.lock.byName} on another device.`);
+      } else {
+        alert("Game is locked by another device.");
+      }
+      if (doc) {
+        if(Array.isArray(doc.games)) setHistory(doc.games);
+        if(typeof doc.version==='number') setCloudVersion(doc.version);
+        const lock = doc.lock || null;
+        setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
+      }
+      return;
+    }
+
+    if(!res.ok){
+      const msg = await res.text();
+      alert(msg || "Failed to toggle host lock");
+      return;
+    }
+    const doc = await res.json().catch(()=>null);
+    if (doc) {
+      if(Array.isArray(doc.games)) setHistory(doc.games);
+      if(typeof doc.version==='number') setCloudVersion(doc.version);
+      const lock = doc.lock || null;
+      setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
+    } else {
+      setHostLock(s=>({ ...s, active: locked, by: locked ? (byName||s.by) : null }));
+    }
   }
 
-  // Manual refresh
   async function refreshSeason(){
     try{
       setSyncStatus("syncing");
       const doc = await apiGetSeason();
-      setHistory(doc.games||[]);
-      setCloudVersion(doc.version||0);
+      if(Array.isArray(doc.games)) setHistory(doc.games);
+      if(typeof doc.version==='number') setCloudVersion(doc.version);
+      const lock = doc.lock || null;
+      setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
       setSyncStatus("upToDate");
     }catch(e){
       setSyncStatus("error");
     }
   }
+}
+
 
   // Compact mobile: tabs + drawer
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -145,6 +285,8 @@ export default function App(){
           setHistory(doc.games);
         }
         setCloudVersion(doc.version||0);
+        const lock = doc.lock || null;
+        setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
         setSyncStatus("upToDate");
       }catch(e){ setSyncStatus("error"); }
     })();
@@ -157,6 +299,10 @@ export default function App(){
         if((doc.version||0)!==cloudVersion){
           setHistory(doc.games||[]);
           setCloudVersion(doc.version||0);
+          const lock = doc.lock || null;
+          setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
+          const lock = doc.lock || null;
+          setHostLock(lock ? {active:!!(lock.active??true), by: lock.byName||lock.by||null, until: lock.until||null, at: lock.lockedAt||null} : {active:false, by:null, until:null, at:null});
         }
       }catch(e){ /* ignore transient errors */ }
     }, 10000);
@@ -217,18 +363,8 @@ export default function App(){
         celebrated:false
       } : null
     };
-    try{ 
-      setSyncStatus("syncing");
-      const doc = await apiAppendGame(g); 
-      setHistory(doc.games||[]); 
-      setCloudVersion(doc.version||0); 
-      setSyncStatus("upToDate");
-    }
-    catch(e){ 
-      console.error(e); 
-      setHistory(h=>[g,...h]); 
-      setSyncStatus("error");
-    }
+    try{ const doc = await apiAppendGame(g); setHistory(doc.games||[]); setCloudVersion(doc.version||0); }
+    catch(e){ console.error(e); setHistory(h=>[g,...h]); }
   }
 
   function autoBalance(){
@@ -240,14 +376,11 @@ export default function App(){
     if (window.confirm("Delete this game from history?")) {
       (async()=>{
         try{
-          setSyncStatus("syncing");
           const doc = await apiDeleteGame(id);
           setHistory(doc.games||[]); setCloudVersion(doc.version||0);
-          setSyncStatus("upToDate");
         }catch(e){
           console.error(e);
           setHistory(h=> h.filter(g=> g.id !== id)); // local fallback
-          setSyncStatus("error");
         }
       })();
     }
@@ -706,14 +839,21 @@ export default function App(){
         <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
         <div className="brand">
           <h1>PocketPoker</h1>
-          <span className="badge">Cloud</span>
-          <span className="meta" style={{marginLeft:8}}>
-            <strong>Sync:</strong> {syncStatus} • v{cloudVersion}
-            <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button>
-          </span>
+          <span className="badge">Local</span>
+          <span className="meta" style={{marginLeft:8}}><strong>Sync:</strong> {syncStatus} • v{cloudVersion} <button className="btn ghost small" style={{marginLeft:8}} onClick={refreshSeason}>Refresh</button></span>
         </div>
         <div className="pp-hide-mobile">
           <div className="toolbar">
+            <button className="btn secondary" onClick={async()=>{
+              if(!hostLock.active){
+                const pick = await chooseLocker(playerNames);
+                if(!pick) return;
+                setWhoAmIState(pick); setWhoAmI(pick);
+                await apiLockSeason(true, pick);
+              } else {
+                await apiLockSeason(false);
+              }
+            }}>{hostLock.active ? (hostLock.by ? `Unlock (${hostLock.by})` : "Unlock") : "Activate Host Lock"}</button>
             <div className="switch">
               <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
               <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
