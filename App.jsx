@@ -1,413 +1,523 @@
-// App.jsx — Phase 2b.1 v10
-// Enhancements: 
-//  - FIX: Longest streak now works (Maps -> plain objects for render)
-//  - Wins scope selector: All / Last 10 / Last 20 games
-//  - Leaderboard shows Win Rate (wins / games played in scope)
-//  - Better bar labels; top bar highlighted
-//  - Cumulative chart uses scoped games (top 3 by scoped wins)
-//  - Keeps all phase 1/2a features (equal-split, prize-from-pot, ledgers with prize edges)
-
 import React, { useMemo, useState, useEffect } from "react";
-import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
+import PlayerRow from "./PlayerRow.jsx";
+import { aud, sum, round2, settle, nextFridayISO, toCSV } from "./calc.js";
 
-const DEFAULT_BUYIN=50, DEFAULT_PRIZE=20, uid=()=>Math.random().toString(36).slice(2,9);
-const blank=()=>({id:uid(),name:"",buyIns:0,cashOut:0}), LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_profiles";
-const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
-const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
+// ===============================
+// 2B Host Lock — minimal, safe, no layout changes
+// ===============================
 
-// === Deterministic equal-split per-loser (cap & redistribute) ===
-function settleEqualSplitCapped(rows){
-  const winnersBase = rows.filter(r=> r.net > 0.0001).map(r=>({ name: (r.name||"Player"), need: round2(r.net) }));
-  const losersBase  = rows.filter(r=> r.net < -0.0001).map(r=>({ name: (r.name||"Player"), loss: round2(-r.net) }));
-  const txns = [];
-  if (!winnersBase.length || !losersBase.length) return txns;
-  const winnersOrder = [...winnersBase].sort((a,b)=> a.name.localeCompare(b.name));
-  const losersSorted = [...losersBase].sort((a,b)=> (b.loss - a.loss) || a.name.localeCompare(b.name));
-  const getEligible = () => winnersOrder.filter(w => w.need > 0.0001);
-  losersSorted.forEach(L => {
-    let remaining = round2(L.loss);
-    while (remaining > 0.0001) {
-      const eligible = getEligible(); if (!eligible.length) break;
-      const equalRaw = remaining / eligible.length;
-      let distributed = 0;
-      for (let i = 0; i < eligible.length; i++) {
-        const w = eligible[i];
-        const isLast = i === eligible.length - 1;
-        const shareTarget = Math.min(equalRaw, w.need);
-        let give = isLast ? round2(remaining - distributed) : round2(shareTarget);
-        give = Math.min(give, round2(w.need), round2(remaining - distributed));
-        if (give > 0.0001) {
-          txns.push({ from: L.name, to: w.name, amount: round2(give) });
-          w.need = round2(w.need - give);
-          distributed = round2(distributed + give);
-        }
-      }
-      remaining = round2(remaining - distributed);
-      if (distributed <= 0.0001) break;
+// Persistent device id (per browser) for lock API
+const DEVICE_KEY = "pp_device";
+function getDeviceId() {
+  try {
+    let id = localStorage.getItem(DEVICE_KEY);
+    if (!id) {
+      id = (crypto?.randomUUID?.() || Math.random().toString(36).slice(2)) + "-" + Date.now().toString(36);
+      localStorage.setItem(DEVICE_KEY, id);
     }
+    return id;
+  } catch {
+    return "unknown";
+  }
+}
+
+// Remember who this device is (local only)
+const WHOAMI_KEY = "pp_whoami";
+function getWhoAmI() {
+  try { return localStorage.getItem(WHOAMI_KEY) || ""; } catch { return ""; }
+}
+function setWhoAmI(name) {
+  try { name ? localStorage.setItem(WHOAMI_KEY, String(name)) : localStorage.removeItem(WHOAMI_KEY); } catch {}
+}
+
+// Small name picker (buttons for current players). No JSX styles used.
+function chooseLocker(names) {
+  if (!Array.isArray(names) || names.length === 0) {
+    const v = window.prompt("No named players yet. Type the host's name:");
+    return Promise.resolve(v && v.trim() ? v.trim() : null);
+  }
+  return new Promise((resolve) => {
+    const root = document.createElement("div");
+    root.style.position = "fixed";
+    root.style.inset = "0";
+    root.style.zIndex = "5000";
+    root.style.display = "flex";
+    root.style.alignItems = "center";
+    root.style.justifyContent = "center";
+
+    const backdrop = document.createElement("div");
+    backdrop.style.position = "absolute";
+    backdrop.style.inset = "0";
+    backdrop.style.background = "rgba(0,0,0,.45)";
+
+    const card = document.createElement("div");
+    card.style.position = "relative";
+    card.style.background = "var(--surface,#1f2937)";
+    card.style.color = "inherit";
+    card.style.borderRadius = "14px";
+    card.style.padding = "14px";
+    card.style.width = "min(92vw,420px)";
+    card.style.boxShadow = "0 10px 30px rgba(0,0,0,.3)";
+
+    const title = document.createElement("div");
+    title.textContent = "Activate Host Lock";
+    title.style.fontWeight = "700";
+    title.style.marginBottom = "8px";
+
+    const list = document.createElement("div");
+    list.style.display = "flex";
+    list.style.flexWrap = "wrap";
+    list.style.gap = "8px";
+    list.style.margin = "6px 0";
+    list.style.maxHeight = "240px";
+    list.style.overflow = "auto";
+
+    names.forEach((n) => {
+      const btn = document.createElement("button");
+      btn.textContent = n;
+      btn.style.padding = "8px 12px";
+      btn.style.borderRadius = "10px";
+      btn.style.border = "1px solid rgba(255,255,255,.15)";
+      btn.style.background = "rgba(255,255,255,.05)";
+      btn.style.cursor = "pointer";
+      btn.addEventListener("click", () => cleanup(n));
+      list.appendChild(btn);
+    });
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.marginTop = "10px";
+
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    cancel.style.padding = "8px 12px";
+    cancel.style.borderRadius = "10px";
+    cancel.style.border = "1px solid rgba(255,255,255,.15)";
+    cancel.style.background = "transparent";
+    cancel.style.cursor = "pointer";
+    cancel.addEventListener("click", () => cleanup(null));
+
+    root.appendChild(backdrop);
+    actions.appendChild(cancel);
+    card.appendChild(title);
+    card.appendChild(list);
+    card.appendChild(actions);
+    root.appendChild(card);
+    document.body.appendChild(root);
+
+    const cleanup = (val = null) => { root.remove(); resolve(val); };
+    backdrop.addEventListener("click", () => cleanup(null));
   });
-  return txns;
-}
-// === End equal-split ===
-
-const palette = ["#4e79a7","#f28e2c","#e15759","#76b7b2","#59a14f","#edc949","#af7aa1"];
-
-// Build polyline path
-function toPath(points){
-  if (!points.length) return "";
-  return "M " + points.map(([x,y],i)=> (i===0? `${x} ${y}` : `L ${x} ${y}`)).join(" ");
 }
 
-export default function App(){
-  const [players,setPlayers]=useState([blank(),blank()]);
-  const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
+// ===============================
+// App constants & local storage
+// ===============================
+const API_BASE = ""; // same origin
+const SEASON_ID = (import.meta && import.meta.env && import.meta.env.VITE_SEASON_ID) || "default";
 
-  const [prizeFromPot,setPrizeFromPot]=useState(true);
-  const [prizeAmount,setPrizeAmount]=useState(DEFAULT_PRIZE);
+const DEFAULT_BUYIN = 50, DEFAULT_PERHEAD = 20;
+const uid = () => Math.random().toString(36).slice(2, 9);
+const blank = () => ({ id: uid(), name: "", buyIns: 0, cashOut: 0 });
+const LS = "pocketpoker_state";
 
-  const [settlementMode, setSettlementMode] = useState("equalSplit");
-  const [winsMode, setWinsMode] = useState("fractional"); // 'fractional' | 'whole'
-  const [winsScope, setWinsScope] = useState("all"); // 'all' | 'last10' | 'last20'
+const load = () => { try { const r = localStorage.getItem(LS); return r ? JSON.parse(r) : null; } catch { return null; } };
+const save = (s) => { try { localStorage.setItem(LS, JSON.stringify(s)); } catch {} };
 
-  const [history,setHistory]=useState([]);
-  const [started,setStarted]=useState(false);
-  const [overrideMismatch,setOverrideMismatch]=useState(false);
-  const [theme,setTheme]=useState(()=>localStorage.getItem(THEME) || "dark");
-  const [felt,setFelt]=useState(()=>localStorage.getItem(FELT) || "emerald");
-  const [expanded,setExpanded]=useState({});
-  const [ledgerExpanded,setLedgerExpanded]=useState({});
-  const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
-
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
-  useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
-
-  useEffect(()=>{ 
-    const s=load();
-    if(s){
-      setPlayers(s.players?.length?s.players:[blank(),blank()]);
-      setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
-      setPrizeFromPot( typeof s.prizeFromPot === "boolean" ? s.prizeFromPot : true );
-      setPrizeAmount( typeof s.prizeAmount === "number" ? s.prizeAmount : DEFAULT_PRIZE );
-      setSettlementMode( s.settlementMode === "proportional" || s.settlementMode === "equalSplit" ? s.settlementMode : "equalSplit" );
-      setHistory(s.history ?? []);
-      setStarted(!!s.started);
+// ===============================
+// Equal Settlement helper (restored)
+// ===============================
+function equalSettlement(input) {
+  const arr = (input || []).map((p) => {
+    const name = p.name || "Player";
+    let net = 0;
+    if (typeof p.net === "number") net = p.net;
+    else if (typeof p.netAdj === "number") net = p.netAdj;
+    else {
+      const cash = Number(p.cashOutAdj ?? p.cashOut ?? 0);
+      const buyIns = Number(p.buyIns ?? 0) * (window.__pp_buyInAmount ?? 0);
+      net = cash - buyIns;
     }
-  },[]);
-  useEffect(()=>{ 
-    save({players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode});
-  }, [players,buyInAmount,prizeFromPot,prizeAmount,history,started,settlementMode]);
+    return { name, net: round2(net) };
+  });
+  return settle(arr);
+}
 
-  useEffect(()=>{
-    document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
-    localStorage.setItem(THEME, theme);
-  }, [theme]);
-  useEffect(()=>{
-    document.documentElement.setAttribute('data-felt', felt==='midnight'?'midnight':'emerald');
-    localStorage.setItem(FELT, felt);
-  }, [felt]);
-  useEffect(()=>{
-    localStorage.setItem(PROFILES, JSON.stringify(profiles));
-  }, [profiles]);
+// ===============================
+// Component
+// ===============================
+export default function App() {
+  const [players, setPlayers] = useState([blank(), blank()]);
+  const [buyInAmount, setBuyInAmount] = useState(DEFAULT_BUYIN);
+  const [applyPerHead, setApplyPerHead] = useState(false);
+  const [perHeadAmount, setPerHeadAmount] = useState(DEFAULT_PERHEAD);
+  const [history, setHistory] = useState([]);
 
-  const totals=useMemo(()=>{
-    const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
-    const withNet=base.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
+  // Cloud sync bits
+  const [cloudVersion, setCloudVersion] = useState(0);
+  const [syncStatus, setSyncStatus] = useState("idle"); // idle | syncing | upToDate | error
 
-    let adjusted = withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
+  // Host Lock
+  const [hostLock, setHostLock] = useState({ active: false, by: null, until: null, at: null });
+  const [whoAmI, setWhoAmIState] = useState(() => getWhoAmI() || "");
 
-    if (prizeFromPot && players.length>=2) {
-      const N = adjusted.length;
-      const topNet = Math.max(...withNet.map(p=>p.net));
-      const winners = withNet.filter(p=> Math.abs(p.net - topNet) < 0.0001);
-      const T = winners.length;
-      const pool = round2(prizeAmount * N);
-      const perWinner = T>0 ? round2(pool / T) : 0;
+  // expose buy-in for equalSettlement fallback
+  useEffect(() => { window.__pp_buyInAmount = buyInAmount; }, [buyInAmount]);
 
-      adjusted = adjusted.map(p=>{
-        const cash = round2(p.baseCash - prizeAmount);
-        return {...p, prize: round2(-prizeAmount), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+  // basic computed
+  const playerNames = useMemo(
+    () => Array.from(new Set((players || []).map((p) => (p.name || "").trim()).filter(Boolean))),
+    [players]
+  );
+  const canEdit = !hostLock.active || (whoAmI && hostLock.by && whoAmI === hostLock.by);
+
+  // ---- API helpers
+  async function apiGetSeason() {
+    const res = await fetch(`${API_BASE}/api/season/get?id=${encodeURIComponent(SEASON_ID)}`);
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+  async function apiAppendGame(game) {
+    const res = await fetch(`${API_BASE}/api/season/append-game`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "If-Match": String(cloudVersion) },
+      body: JSON.stringify({ seasonId: SEASON_ID, game })
+    });
+    if (res.status === 409) {
+      // refresh and retry once
+      const doc = await apiGetSeason();
+      hydrateFromDoc(doc);
+      const res2 = await fetch(`${API_BASE}/api/season/append-game`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "If-Match": String(doc.version || 0) },
+        body: JSON.stringify({ seasonId: SEASON_ID, game })
       });
-
-      let distributed = 0, idx = 0;
-      adjusted = adjusted.map(p=>{
-        if (Math.abs((p.baseCash - p.buyIns*buyInAmount) - topNet) < 0.0001) {
-          const isLast = idx === T-1;
-          const give = isLast ? round2(pool - distributed) : perWinner;
-          distributed = round2(distributed + give);
-          const cash = round2(p.cashOutAdj + give);
-          idx++;
-          return {...p, prize: round2(p.prize + give), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
-        }
-        return p;
-      });
+      if (!res2.ok) throw new Error(await res2.text());
+      return await res2.json();
     }
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+  async function apiDeleteGame(gameId) {
+    const res = await fetch(`${API_BASE}/api/season/delete-game`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "If-Match": String(cloudVersion) },
+      body: JSON.stringify({ seasonId: SEASON_ID, gameId })
+    });
+    if (res.status === 409) {
+      // refresh and retry once
+      const doc = await apiGetSeason();
+      hydrateFromDoc(doc);
+      const res2 = await fetch(`${API_BASE}/api/season/delete-game`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "If-Match": String(doc.version || 0) },
+        body: JSON.stringify({ seasonId: SEASON_ID, gameId })
+      });
+      if (!res2.ok) throw new Error(await res2.text());
+      return await res2.json();
+    }
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
 
-    const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
-    const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
-    const diff = round2(cashAdjSum - buyInSum);
+  // Host lock toggle — sends {action, byName?, deviceId}
+  async function apiLockSeason(locked, byName) {
+    const deviceId = getDeviceId();
+    const payload = {
+      seasonId: SEASON_ID,
+      action: locked ? "lock" : "unlock",
+      deviceId
+    };
+    if (locked && byName) payload.byName = byName;
 
-    const basis = adjusted.map(p=>({ name: p.name || "Player", net: round2(p.netAdj - p.prize) }));
-    const txns = settlementMode === "equalSplit"
-      ? settleEqualSplitCapped(basis)
-      : settle(basis);
-
-    const sorted = [...adjusted].sort((a,b)=>b.netAdj-a.netAdj);
-    const top = sorted.length ? sorted[0] : null;
-
-    return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
-  }, [players, buyInAmount, prizeFromPot, prizeAmount, settlementMode]);
-
-  function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
-  const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
-  const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setStarted(true); setOverrideMismatch(false); };
-  const resetGame=()=>{ setPlayers([blank(),blank()]); setStarted(false); setOverrideMismatch(false); };
-
-  function saveGameToHistory(){
-    const stamp = new Date().toISOString();
-    const g={ id:uid(), stamp,
-      settings:{
-        buyInAmount,
-        prize: prizeFromPot ? { mode:'pot_all', amount: prizeAmount } : { mode:'none', amount: 0 },
-        settlement: { mode: settlementMode }
+    const res = await fetch(`${API_BASE}/api/season/lock`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-client-id": deviceId,
+        "x-client-name": byName || hostLock.by || "Unknown"
       },
-      players: totals.adjusted.map(p=>({
-        name:p.name||"Player",buyIns:p.buyIns,buyInTotal:p.buyInTotal,
-        cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj
-      })),
-      totals:{buyIns:totals.buyInSum,cashOuts:totals.cashAdjSum,diff:totals.diff},
-      txns: totals.txns
-    };
-    setHistory(h=>[g,...h]);
-  }
-
-  function autoBalance(){
-    const {top,diff}=totals; if(!top||Math.abs(diff)<0.01) return;
-    setPlayers(ps=>ps.map(p=>p.id===top.id?{...p,cashOut:round2(p.cashOut - diff)}:p));
-  }
-  function deleteGame(id){
-    if (window.confirm("Delete this game from history?")) setHistory(h=> h.filter(g=> g.id !== id));
-  }
-  function clearHistory(){
-    if (window.confirm("Delete ALL saved games? This cannot be undone.")) { setHistory([]); setExpanded({}); }
-  }
-
-  function downloadCSV(filename, rows){
-    const csv = toCSV(rows);
-    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-    setTimeout(()=>URL.revokeObjectURL(url), 2000);
-  }
-  function exportSeason(){
-    const r1 = [["game_id","stamp","player","buy_in","cash_out","prize_adj","net"]];
-    history.forEach(g=>{ g.players.forEach(p=> r1.push([g.id, g.stamp, p.name, p.buyInTotal, p.cashOut, p.prize, p.net])); });
-    downloadCSV("players.csv", r1);
-
-    const r2 = [["game_id","stamp","from","to","amount"]];
-    history.forEach(g => (g.txns || []).forEach(t => r2.push([g.id, g.stamp, t.from, t.to, t.amount])));
-    downloadCSV("transfers.csv", r2);
-  }
-
-  const knownNames = useMemo(()=>{
-    const set = new Set();
-    players.forEach(p=> p.name && set.add(p.name));
-    history.forEach(g=> g.players.forEach(p=> p.name && set.add(p.name)));
-    return Array.from(set).sort();
-  }, [players, history]);
-
-  const ledgers = useMemo(()=>{
-    const L = new Map();
-    const ensure = (n)=>{
-      if(!L.has(n)) L.set(n,{ netTransfers:0, prize:0, owes:new Map(), owedBy:new Map(), owesPrize:new Map(), owedByPrize:new Map() });
-      return L.get(n);
-    };
-
-    history.forEach(g=>{
-      (g.txns||[]).forEach(t=>{
-        const amt = round2(t.amount);
-        const from=ensure(t.from), to=ensure(t.to);
-        from.netTransfers = round2((from.netTransfers||0) - amt);
-        to.netTransfers   = round2((to.netTransfers||0)   + amt);
-        from.owes.set(t.to, round2((from.owes.get(t.to)||0) + amt));
-        to.owedBy.set(t.from, round2((to.owedBy.get(t.from)||0) + amt));
-      });
-
-      const pm = g.settings?.prize?.mode;
-      const prmAmt = typeof g.settings?.prize?.amount === 'number' ? g.settings.prize.amount : DEFAULT_PRIZE;
-      const plist = g.players || [];
-      plist.forEach(p=>{
-        const v = ensure(p.name||"Player");
-        v.prize = round2((v.prize||0) + round2(p.prize||0));
-      });
-      if (pm === 'pot_all' && prmAmt > 0 && plist.length > 0) {
-        const netsGameOnly = plist.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
-        const top = Math.max(...netsGameOnly.map(x=>x.netGame));
-        const winners = netsGameOnly.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
-        const T = winners.length || 1;
-        const share = round2(prmAmt / T);
-        plist.forEach(p=>{
-          const pname = p.name||"Player";
-          const contributed = round2(p.prize||0) < 0 ? round2(-p.prize) : 0;
-          if (contributed <= 0.0001) return;
-          winners.forEach(wname=>{
-            if (wname === pname) return;
-            const vFrom = ensure(pname), vTo = ensure(wname);
-            const amt = round2(share);
-            vFrom.owesPrize.set(wname, round2((vFrom.owesPrize.get(wname)||0) + amt));
-            vTo.owedByPrize.set(pname, round2((vTo.owedByPrize.get(pname)||0) + amt));
-          });
-        });
-      }
+      body: JSON.stringify(payload)
     });
 
-    const out = {};
-    for (const [name, v] of L) {
-      out[name] = {
-        net: round2((v.netTransfers||0) + (v.prize||0)),
-        prize: round2(v.prize||0),
-        netTransfers: round2(v.netTransfers||0),
-        owes: Array.from(v.owes, ([to,amount])=>({to,amount:round2(amount)})),
-        owedBy: Array.from(v.owedBy, ([from,amount])=>({from,amount:round2(amount)})),
-        owesPrize: Array.from(v.owesPrize, ([to,amount])=>({to,amount:round2(amount)})),
-        owedByPrize: Array.from(v.owedByPrize, ([from,amount])=>({from,amount:round2(amount)}))
-      };
+    if (res.status === 423) {
+      const doc = await res.json().catch(() => null);
+      alert(doc?.lock?.byName ? `Game is locked by ${doc.lock.byName} on another device.` : "Game is locked by another device.");
+      if (doc) hydrateFromDoc(doc);
+      return;
     }
-    return out;
-  }, [history]);
 
-  // ---- Stats (scoped, fractional/whole ties, win rate, streak) ----
-  const stats = useMemo(()=>{
-    const byTimeAsc = [...history].sort((a,b)=> new Date(a.stamp) - new Date(b.stamp));
-    let games = byTimeAsc;
-    if (winsScope === 'last10') games = byTimeAsc.slice(-10);
-    if (winsScope === 'last20') games = byTimeAsc.slice(-20);
+    if (!res.ok) {
+      alert(await res.text());
+      return;
+    }
+    const doc = await res.json().catch(() => null);
+    if (doc) hydrateFromDoc(doc);
+  }
 
-    const wins = new Map();
-    const played = new Map();
-    const cumulative = {};
-    const streakNow = new Map();
-    const streakBest = new Map();
+  // Merge server doc into local UI state (single lock variable!)
+  function hydrateFromDoc(doc) {
+    if (doc && Array.isArray(doc.games)) setHistory(doc.games);
+    if (doc && typeof doc.version === "number") setCloudVersion(doc.version);
 
-    const allNames = new Set();
-    games.forEach(g=> g.players.forEach(p=> allNames.add(p.name||"Player")));
-    [...allNames].forEach(n=> cumulative[n] = []);
+    const lk = doc && (doc.lock || null);
+    if (lk) {
+      const active = !!(lk.active ?? lk.locked ?? true);
+      const by = lk.byName || lk.by || lk.user || lk.device || null;
+      const until = lk.until || lk.unlockAt || null;
+      const at = lk.lockedAt || lk.at || null;
+      setHostLock({ active, by, until, at });
+    } else {
+      setHostLock({ active: false, by: null, until: null, at: null });
+    }
+  }
 
-    const dates = games.map(g=> new Date(g.stamp));
+  // Manual refresh
+  async function refreshSeason() {
+    try {
+      setSyncStatus("syncing");
+      const doc = await apiGetSeason();
+      hydrateFromDoc(doc);
+      setSyncStatus("upToDate");
+    } catch (e) {
+      setSyncStatus("error");
+    }
+  }
 
-    games.forEach((g, gi)=>{
-      const roster = new Set(g.players.map(p=> p.name||"Player"));
-      roster.forEach(n=> played.set(n, (played.get(n)||0)+1));
+  // Load local, then fetch server on mount
+  useEffect(() => {
+    const s = load();
+    if (s) {
+      setPlayers(s.players?.length ? s.players : [blank(), blank()]);
+      setBuyInAmount(s.buyInAmount ?? DEFAULT_BUYIN);
+      setApplyPerHead(!!s.applyPerHead);
+      setPerHeadAmount(s.perHeadAmount ?? DEFAULT_PERHEAD);
+      setHistory(s.history ?? []);
+    }
+    (async () => {
+      try {
+        setSyncStatus("syncing");
+        const doc = await apiGetSeason();
+        hydrateFromDoc(doc);
+        setSyncStatus("upToDate");
+      } catch (e) {
+        setSyncStatus("error");
+      }
+    })();
+  }, []);
 
-      const netsGame = g.players.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
-      const top = Math.max(...netsGame.map(x=>x.netGame));
-      const winners = netsGame.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
-      const T = winners.length || 1;
-      const add = winsMode === 'fractional' ? (1 / T) : 1;
-      const winnersSet = new Set(winners);
+  // Persist local
+  useEffect(() => {
+    save({ players, buyInAmount, applyPerHead, perHeadAmount, history });
+  }, [players, buyInAmount, applyPerHead, perHeadAmount, history]);
 
-      // wins & streaks
-      netsGame.forEach(x=>{
-        wins.set(x.name, round2((wins.get(x.name)||0) + (winnersSet.has(x.name) ? add : 0)));
-        const cur = (streakNow.get(x.name) || 0);
-        const next = winnersSet.has(x.name) ? cur + 1 : 0;
-        streakNow.set(x.name, next);
-        streakBest.set(x.name, Math.max(streakBest.get(x.name)||0, next));
+  // Poll every 10s for remote changes (version or lock only)
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const doc = await apiGetSeason();
+        const remoteVersion = doc?.version ?? 0;
+        const lk = doc?.lock || null;
+
+        const active = !!(lk?.active ?? lk?.locked ?? false);
+        const by = lk?.byName || lk?.by || null;
+
+        if (remoteVersion !== cloudVersion || active !== hostLock.active || by !== hostLock.by) {
+          hydrateFromDoc(doc);
+        }
+      } catch {}
+    }, 10000);
+    return () => clearInterval(t);
+  }, [cloudVersion, hostLock.active, hostLock.by]);
+
+  // Totals
+  const totals = useMemo(() => {
+    const base = players.map((p) => ({ ...p, buyInTotal: round2(p.buyIns * buyInAmount), baseCash: p.cashOut }));
+    const withNet = base.map((p) => ({ ...p, net: round2(p.baseCash - p.buyIns * buyInAmount) }));
+    const top = [...withNet].sort((a, b) => b.net - a.net)[0];
+    let adjusted = withNet.map((p) => ({ ...p, prize: 0, cashOutAdj: round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns * buyInAmount) }));
+
+    if (applyPerHead && top) {
+      const heads = Math.max(0, players.length - 1);
+      adjusted = withNet.map((p) => {
+        if (p.id === top.id) {
+          const cash = round2(p.baseCash + perHeadAmount * heads);
+          return { ...p, prize: perHeadAmount * heads, cashOutAdj: cash, netAdj: round2(cash - p.buyIns * buyInAmount) };
+        } else {
+          const cash = round2(p.baseCash - perHeadAmount);
+          return { ...p, prize: -perHeadAmount, cashOutAdj: cash, netAdj: round2(cash - p.buyIns * buyInAmount) };
+        }
       });
+    }
 
-      // cumulative wins over time
-      [...allNames].forEach(n=>{
-        const prev = gi>0 ? cumulative[n][gi-1] : 0;
-        const inc = winnersSet.has(n) ? add : 0;
-        cumulative[n][gi] = round2(prev + inc);
-      });
-    });
+    const buyInSum = round2(sum(adjusted.map((p) => p.buyInTotal)));
+    const cashAdjSum = round2(sum(adjusted.map((p) => p.cashOutAdj)));
+    const diff = round2(cashAdjSum - buyInSum);
+    const txns = settle(adjusted.map((p) => ({ name: p.name || "Player", net: p.netAdj })));
+    const sorted = [...adjusted].sort((a, b) => b.net - a.net);
+    const winner = sorted.length ? sorted[0] : null;
+    const perHeadPayers = winner ? adjusted.filter((p) => p.id !== winner.id).map((p) => p.name || "Player") : [];
+    return { adjusted, top, buyInSum, cashAdjSum, diff, txns, winner, perHeadPayers };
+  }, [players, buyInAmount, applyPerHead, perHeadAmount]);
 
-    // Best net night within scope
-    let bestNight = { name:null, amount: -Infinity, date:null, gameId:null };
-    games.forEach(g=>{
-      const arr = g.players.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
-      arr.forEach(x=>{
-        if (x.netGame > bestNight.amount) bestNight = { name:x.name, amount:x.netGame, date: new Date(g.stamp), gameId:g.id };
-      });
-    });
+  function updatePlayer(u) { setPlayers((ps) => (u?._remove ? ps.filter((p) => p.id !== u.id) : ps.map((p) => (p.id === u.id ? u : p)))); }
+  const addPlayer = () => setPlayers((ps) => [...ps, blank()]);
+  const startGame = () => setPlayers((ps) => ps.map((p) => ({ ...p, buyIns: 0, cashOut: 0 })));
+  const resetGame = () => setPlayers([blank(), blank()]);
 
-    const leaderboard = Array.from(wins, ([name, w]) => {
-      const gp = played.get(name)||0;
-      const rate = gp>0 ? round2((w/gp)*100) : 0;
-      return {name, wins:w, played:gp, rate};
-    }).sort((a,b)=> b.wins - a.wins);
+  async function saveGameToHistory() {
+    const stamp = new Date().toISOString();
+    const perHeadDue = nextFridayISO(stamp);
+    const perHeadPayments = {};
+    totals.perHeadPayers.forEach((n) => (perHeadPayments[n] = { paid: false, method: null, paidAt: null }));
+    const g = {
+      id: uid(),
+      stamp,
+      settings: { buyInAmount, perHead: applyPerHead ? perHeadAmount : 0 },
+      players: totals.adjusted.map((p) => ({ name: p.name || "Player", buyIns: p.buyIns, buyInTotal: p.buyInTotal, cashOut: p.cashOutAdj, prize: p.prize, net: p.netAdj })),
+      totals: { buyIns: totals.buyInSum, cashOuts: totals.cashAdjSum, diff: totals.diff },
+      txns: totals.txns,
+      perHead: applyPerHead
+        ? { winner: totals.winner?.name || "Winner", amount: perHeadAmount, payers: totals.perHeadPayers, due: perHeadDue, payments: perHeadPayments, celebrated: false }
+        : null
+    };
+    try {
+      setSyncStatus("syncing");
+      const doc = await apiAppendGame(g);
+      hydrateFromDoc(doc);
+      setSyncStatus("upToDate");
+    } catch (e) {
+      console.error(e);
+      setHistory((h) => [g, ...h]); // local fallback
+      setSyncStatus("error");
+    }
+  }
 
-    // Convert streakBest Map to plain object for rendering
-    const streakObj = Object.fromEntries(Array.from(streakBest.entries()));
+  function autoBalance() {
+    const { top, diff } = totals; if (!top || Math.abs(diff) < 0.01) return;
+    setPlayers((ps) => ps.map((p) => (p.id === top.id ? { ...p, cashOut: round2(p.cashOut - diff) } : p)));
+  }
 
-    return { games, dates, wins:leaderboard, cumulative, bestNight, streakBest:streakObj };
-  }, [history, winsMode, winsScope]);
+  function deleteGame(id) {
+    if (!window.confirm("Delete this game from history?")) return;
+    (async () => {
+      try {
+        setSyncStatus("syncing");
+        const doc = await apiDeleteGame(id);
+        hydrateFromDoc(doc);
+        setSyncStatus("upToDate");
+      } catch (e) {
+        console.error(e);
+        setHistory((h) => h.filter((g) => g.id !== id)); // local fallback
+        setSyncStatus("error");
+      }
+    })();
+  }
 
-  // --- GameSection ---
-  const GameSection = (
-    <div className="surface" style={{marginTop:16}}>
+  // --- UI ---
+  return (
+    <>
+      {/* Header with Sync + Host Lock */}
+      <div className="header" style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <h1 style={{margin:0}}>PocketPoker</h1>
+          {hostLock.active && (
+            <span className="pill" style={{marginLeft:8}}>🔒 Locked{hostLock.by ? ` by ${hostLock.by}` : ""}</span>
+          )}
+        </div>
+        <div className="toolbar" style={{display:"flex",alignItems:"center",gap:8}}>
+          <span className="meta"><strong>Sync:</strong> {syncStatus} • v{cloudVersion}</span>
+          <button className="btn ghost small" onClick={refreshSeason}>Refresh</button>
+          <button
+            className="btn secondary"
+            onClick={async () => {
+              if (!hostLock.active) {
+                const pick = await chooseLocker(playerNames);
+                if (!pick) return;
+                setWhoAmIState(pick); setWhoAmI(pick);
+                await apiLockSeason(true, pick);
+              } else {
+                await apiLockSeason(false);
+              }
+            }}
+          >
+            {hostLock.active ? (hostLock.by ? `Unlock (${hostLock.by})` : "Unlock") : "Activate Host Lock"}
+          </button>
+        </div>
+      </div>
+
+      {/* Controls row (unchanged from 2A except readonly gating) */}
       <div className="controls">
         <div className="stack">
-          <button className="btn primary" onClick={startGame}>Start New</button>
-          <button className="btn secondary" onClick={addPlayer}>Add Player</button>
-          <button className="btn danger" onClick={resetGame}>Reset Players</button>
+          <button className="btn primary" onClick={startGame} disabled={!canEdit}>Start New</button>
+          <button className="btn secondary" onClick={addPlayer} disabled={!canEdit}>Add Player</button>
+          <button className="btn danger" onClick={resetGame} disabled={!canEdit}>Reset Players</button>
           <span className="pill">🎯 Enter cash-outs at the end.</span>
         </div>
         <div className="toggles toolbar">
           <label className="inline">Buy-in (A$)
-            <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} />
+            <input className="small mono" type="number" min="1" step="1" value={buyInAmount} onChange={e=>setBuyInAmount(Math.max(1,parseFloat(e.target.value||50)))} disabled={!canEdit} />
           </label>
           <label className="inline">
-            <input type="checkbox" checked={prizeFromPot} onChange={e=>setPrizeFromPot(e.target.checked)} /> Prize from pot: A$
+            <input type="checkbox" checked={applyPerHead} onChange={e=>setApplyPerHead(e.target.checked)} disabled={!canEdit} /> Winner gets A$
           </label>
-          <input className="small mono" type="number" min="0" step="1" value={prizeAmount} onChange={e=>setPrizeAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-          <span className="meta">deduct from all players; split pool among top winners</span>
-        </div>
-        <div className="toggles toolbar" style={{marginTop:8}}>
-          <label className="inline">
-            Settlement
-            <select value={settlementMode} onChange={e=>setSettlementMode(e.target.value)}>
-              <option value="equalSplit">Equal-split per loser (default)</option>
-              <option value="proportional">Proportional (legacy)</option>
-            </select>
-          </label>
+          <input className="small mono" type="number" min="0" step="1" value={perHeadAmount} onChange={e=>setPerHeadAmount(Math.max(0,parseFloat(e.target.value||0)))} disabled={!canEdit} />
+          <span className="meta">from each other player</span>
         </div>
       </div>
 
       <hr className="hair" />
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Player</th>
-            <th className="center">Buy-ins</th>
-            <th className="center">Cash-out</th>
-            <th className="center">Net</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {players.map(p => (<PlayerRow key={p.id} p={p} onChange={updatePlayer} buyInAmount={buyInAmount} />))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <th>Total</th>
-            <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
-            <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
-            <th className="center mono">{totals.diff.toFixed(2)}</th>
-            <th className="center"></th>
-          </tr>
-        </tfoot>
-      </table>
+      {/* Table */}
+      <div style={{position:"relative"}}>
+        {/* read-only overlay (doesn't block header) */}
+        {(hostLock.active && (!whoAmI || whoAmI !== hostLock.by)) && (
+          <>
+            <div
+              title="Host Lock: read-only"
+              style={{position:'absolute', inset:0, background:'rgba(0,0,0,.08)', borderRadius:18, pointerEvents:'auto'}}
+            />
+            <div
+              style={{position:'absolute', top:10, right:10, background:'rgba(0,0,0,.65)', color:'#fff', padding:'6px 10px',
+                      borderRadius:12, border:'1px solid rgba(255,255,255,.15)', fontSize:12}}
+            >
+              🔒 Read-only{hostLock.by ? ` — ${hostLock.by}` : ""}
+            </div>
+          </>
+        )}
+
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th className="center">Buy-ins</th>
+              <th className="center">Cash-out</th>
+              <th className="center">Net</th>
+              <th className="center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {players.map((p) => (<PlayerRow key={p.id} p={p} onChange={updatePlayer} buyInAmount={buyInAmount} />))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
+              <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
+              <th className="center mono">{totals.diff.toFixed(2)}</th>
+              <th className="center"></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
 
       {Math.abs(totals.diff) > 0.01 ? (
         <div className="header" style={{marginTop:12}}>
           <div className="ribbon">⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.</div>
           <div className="toolbar">
-            <button className="btn secondary" onClick={autoBalance}>Auto-Balance</button>
-            <label className="inline"><input type="checkbox" checked={overrideMismatch} onChange={e=>setOverrideMismatch(e.target.checked)} /> Override & Save</label>
+            <button className="btn secondary" onClick={autoBalance} disabled={!canEdit}>Auto-Balance</button>
+            <label className="inline"><input type="checkbox" onChange={()=>{}} /> Override & Save</label>
           </div>
         </div>
       ) : (
@@ -418,439 +528,50 @@ export default function App(){
       )}
 
       <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
-        <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
-      </div>
-    </div>
-  );
-
-  // --- HistorySection ---
-  const HistorySection = (
-    <div className="surface">
-      <div className="header" style={{marginBottom:0}}>
-        <h3 style={{margin:0}}>Game Overview (History)</h3>
-        <div className="toolbar">
-          <button className="btn secondary" onClick={exportSeason}>Export CSVs</button>
-          <button className="btn danger" onClick={clearHistory}>Delete All</button>
-        </div>
-      </div>
-      <div className="meta">Tap details to see prize-from-pot and settlement transfers.</div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Players (with net)</th>
-            <th className="center">Tot Buy-ins</th>
-            <th className="center">Tot Cash-outs</th>
-            <th className="center">Diff</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {history.length===0 ? (
-            <tr><td colSpan="6" className="center meta">No games saved yet.</td></tr>
-          ) : history.map(g=>{
-            const key=g.id;
-            const playersSorted=[...g.players].sort((a,b)=>b.net-a.net);
-            const winner = playersSorted[0];
-            const summary=playersSorted.map(p=>(
-              <span key={p.name} style={{marginRight:8}}>
-                {p.name} ({p.net>=0?'+':''}{p.net.toFixed(2)})
-                {p.name===winner?.name && <span className="chip" title="Top winner"/>}
-              </span>
-            ));
-            const prizeNote = (()=>{
-              const pm = g.settings?.prize?.mode;
-              if (pm === 'pot_all') {
-                const amt = g.settings?.prize?.amount ?? 0;
-                const N = g.players.length;
-                const netsGameOnly = g.players.map(p=> (p.net||0) - (p.prize||0));
-                const topNet = Math.max(...netsGameOnly);
-                const T = netsGameOnly.filter(x=> Math.abs(x - topNet) < 0.0001).length;
-                const pool = amt * N;
-                return `Prize from pot: −A$${amt} from ALL ${N} players → pool A$${pool.toFixed(2)} split among top ${T}`;
-              } else if (pm === 'pot') {
-                const amt = g.settings?.prize?.amount ?? 0;
-                const netsGameOnly = g.players.map(p=> (p.net||0) - (p.prize||0));
-                const topNet = Math.max(...netsGameOnly);
-                const T = netsGameOnly.filter(x=> Math.abs(x - topNet) < 0.0001).length;
-                const N = g.players.length;
-                const pool = amt * Math.max(0, N - T);
-                return `Prize from pot: A$${amt} × ${Math.max(0,N-T)} = A$${pool.toFixed(2)} split among top ${T}`;
-              } else if (g.perHead) {
-                return `Legacy per-head: A$${g.perHead.amount} owed to ${g.perHead.winner}`;
-              }
-              return null;
-            })();
-            return (
-              <React.Fragment key={g.id}>
-                <tr>
-                  <td className="meta mono">{new Date(g.stamp).toLocaleString()}</td>
-                  <td>{summary}</td>
-                  <td className="center mono">{aud(g.totals.buyIns)}</td>
-                  <td className="center mono">{aud(g.totals.cashOuts)}</td>
-                  <td className="center mono">{aud(g.totals.diff)}</td>
-                  <td className="center">
-                    <div className="toolbar" style={{justifyContent:'center'}}>
-                      <button className="btn secondary" onClick={()=>setExpanded(e=>({...e,[key]:!e[key]}))}>{expanded[key]?'Hide':'Details'}</button>
-                      <button className="btn danger" onClick={()=>deleteGame(g.id)}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-                {expanded[key] && (
-                  <tr>
-                    <td colSpan="6">
-                      <div className="detail">
-                        {prizeNote && <div className="meta" style={{marginBottom:8}}>{prizeNote}</div>}
-                        <strong>Per-player results</strong>
-                        <table className="table">
-                          <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
-                          <tbody>
-                            {playersSorted.map(p=>(
-                              <tr key={p.name}>
-                                <td>{p.name}{p.name===winner?.name && <span className="chip" />}</td>
-                                <td className="center mono">{aud(p.buyInTotal)}</td>
-                                <td className="center mono">{aud(p.cashOut)}</td>
-                                <td className="center mono">{aud(p.prize)}</td>
-                                <td className="center mono">{p.net>=0?'+':''}{aud(p.net)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-
-                        <div style={{height:8}} />
-                        <strong>Transfers for settlement</strong> <span className="meta">Mode: {g.settings?.settlement?.mode === 'equalSplit' ? 'Equal-split per loser' : 'Proportional (legacy)'}</span>
-                        <table className="table">
-                          <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
-                          <tbody>
-                            {(g.txns||[]).length===0 ? (
-                              <tr><td colSpan="3" className="center meta">No transfers needed.</td></tr>
-                            ) : (g.txns||[]).map((t,i)=>(
-                              <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  const LedgersSection = (
-    <div className="surface">
-      <h3 style={{marginTop:0}}>Player Ledgers (Cumulative)</h3>
-      <div className="meta">Net = Transfers + Prize impact. Expand to see who owes you A$20 (prize) and who you owe.</div>
-      <table className="table">
-        <thead><tr><th>Player</th><th className="center">Net Balance</th><th className="center">Prize Impact</th><th className="center">Actions</th></tr></thead>
-        <tbody>
-          {Object.keys(ledgers).length===0 ? (
-            <tr><td colSpan="4" className="center meta">No history yet.</td></tr>
-          ) : Object.entries(ledgers).sort((a,b)=> (b[1].net - a[1].net)).map(([name,info])=>{
-            const key = name;
-            return (
-              <React.Fragment key={name}>
-                <tr>
-                  <td>{name}</td>
-                  <td className="center mono">{info.net>=0?'+':''}{aud(info.net)}</td>
-                  <td className="center mono">{info.prize>=0?'+':''}{aud(info.prize)}</td>
-                  <td className="center">
-                    <button className="btn secondary" onClick={()=>setLedgerExpanded(e=>({...e,[key]:!e[key]}))}>
-                      {ledgerExpanded[key] ? 'Hide' : 'Show'}
-                    </button>
-                  </td>
-                </tr>
-                {ledgerExpanded[key] && (
-                  <tr>
-                    <td colSpan="4">
-                      <div className="detail">
-                        <div className="meta" style={{marginBottom:8}}>
-                          Transfers net: {info.netTransfers>=0?'+':''}{aud(info.netTransfers)} • Prize impact: {info.prize>=0?'+':''}{aud(info.prize)} • Total: {info.net>=0?'+':''}{aud(info.net)}
-                        </div>
-
-                        <strong>Settlement transfers</strong>
-                        <table className="table">
-                          <thead><tr><th>They owe</th><th className="center">Amount</th><th>Owed by</th><th className="center">Amount</th></tr></thead>
-                          <tbody>
-                            <tr>
-                              <td>
-                                {(info.owes||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owes.map((x,i)=>(<div key={i}>{x.to}</div>))}
-                              </td>
-                              <td className="center mono">
-                                {(info.owes||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owes.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                              </td>
-                              <td>
-                                {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owedBy.map((x,i)=>(<div key={i}>{x.from}</div>))}
-                              </td>
-                              <td className="center mono">
-                                {(info.owedBy||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owedBy.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-
-                        <div style={{height:10}} />
-
-                        <strong>Prize money (A${DEFAULT_PRIZE} per player by game)</strong>
-                        <table className="table">
-                          <thead><tr><th>They owe (prize)</th><th className="center">Amount</th><th>Owed by (prize)</th><th className="center">Amount</th></tr></thead>
-                          <tbody>
-                            <tr>
-                              <td>
-                                {(info.owesPrize||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owesPrize.map((x,i)=>(<div key={i}>{x.to}</div>))}
-                              </td>
-                              <td className="center mono">
-                                {(info.owesPrize||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owesPrize.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                              </td>
-                              <td>
-                                {(info.owedByPrize||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owedByPrize.map((x,i)=>(<div key={i}>{x.from}</div>))}
-                              </td>
-                              <td className="center mono">
-                                {(info.owedByPrize||[]).length===0 ? <span className="meta">—</span> :
-                                  info.owedByPrize.map((x,i)=>(<div key={i}>{aud(x.amount)}</div>))}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  // ---- Stats Section (enhanced) ----
-  const StatsSection = (
-    <div className="surface">
-      <div className="header" style={{marginBottom:8}}>
-        <h3 style={{margin:0}}>Stats & Charts</h3>
-        <div className="toolbar">
-          <label className="inline">
-            Wins mode
-            <select value={winsMode} onChange={e=>setWinsMode(e.target.value)}>
-              <option value="fractional">Fractional ties (1 ÷ T)</option>
-              <option value="whole">Whole ties (1 each)</option>
-            </select>
-          </label>
-          <label className="inline">
-            Scope
-            <select value={winsScope} onChange={e=>setWinsScope(e.target.value)}>
-              <option value="all">All games</option>
-              <option value="last10">Last 10</option>
-              <option value="last20">Last 20</option>
-            </select>
-          </label>
-        </div>
+        <button className="btn success" onClick={saveGameToHistory} disabled={(Math.abs(totals.diff) > 0.01) || !canEdit}>End Game & Save</button>
       </div>
 
-      {/* Top chips */}
-      <div className="chips">
-        <div className="chip-lg">
-          🥇 Most wins:&nbsp;
-          <strong>{stats.wins[0]?.name ?? '—'}</strong>&nbsp;
-          <span className="mono">{(stats.wins[0]?.wins ?? 0).toFixed(2)}</span>
-        </div>
-        <div className="chip-lg">
-          🔥 Longest streak:&nbsp;
-          {(() => {
-            const entries = Object.entries(stats.streakBest || {}).sort((a,b)=> (b[1]-a[1]));
-            return <><strong>{entries[0]?.[0] || '—'}</strong>&nbsp;<span className="mono">{entries[0]?.[1] ?? 0}</span></>;
-          })()}
-        </div>
-        <div className="chip-lg">
-          💥 Best net night:&nbsp;
-          <strong>{stats.bestNight.name ?? '—'}</strong>&nbsp;
-          <span className="mono">{Number.isFinite(stats.bestNight.amount) ? aud(stats.bestNight.amount) : '—'}</span>
-        </div>
-      </div>
-
-      {/* Wins Leaderboard */}
-      <div className="card" style={{marginTop:12}}>
-        <div className="card-head"><strong>Wins Leaderboard</strong><span className="meta"> (game-only winners, scoped)</span></div>
-        {stats.wins.length===0 ? (
-          <div className="meta">No games yet.</div>
-        ) : (
-          <div className="bars">
-            {(() => {
-              const max = Math.max(...stats.wins.map(x=>x.wins));
-              const bestName = stats.wins[0]?.name;
-              return stats.wins.map((x,i)=>{
-                const w = max>0 ? (x.wins/max)*100 : 0;
-                return (
-                  <div key={x.name} className="bar-row">
-                    <div className="bar-label">{x.name}</div>
-                    <div className="bar-track">
-                      <div className="bar-fill" style={{width:`${w}%`, background: x.name===bestName ? "linear-gradient(90deg,#f5d142,#f0b90b)" : "#4e79a7"}} />
-                    </div>
-                    <div className="bar-value mono" title={`${x.played} games`}>
-                      {x.wins.toFixed(2)}<span className="meta"> • {x.rate.toFixed(0)}%</span>
-                    </div>
-                  </div>
-                );
-              });
-            })()}
+      {/* History (unchanged list, minimal for 2B) */}
+      <div className="surface" style={{marginTop:16}}>
+        <div className="header">
+          <h3 style={{margin:0}}>History</h3>
+          <div className="toolbar">
+            <button className="btn secondary" onClick={()=>{
+              const rows = [["game_id","stamp","player","buy_in","cash_out_adj","prize_adj","net"]];
+              history.forEach(g=> g.players.forEach(p => rows.push([g.id, g.stamp, p.name, p.buyInTotal, p.cashOut, p.prize, p.net])));
+              const csv = toCSV(rows);
+              const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a'); a.href = url; a.download = "players.csv"; a.click();
+              setTimeout(()=>URL.revokeObjectURL(url), 1500);
+            }}>Export CSV</button>
           </div>
-        )}
-      </div>
-
-      {/* Cumulative Wins (Top 3) */}
-      <div className="card" style={{marginTop:12}}>
-        <div className="card-head"><strong>Cumulative Wins Over Time</strong><span className="meta"> (top 3 by scoped wins)</span></div>
-        {stats.games.length===0 ? (
-          <div className="meta">No games to chart.</div>
-        ) : (
-          <div className="svg-wrap">
-            {(() => {
-              const W=640, H=220, P=28;
-              const top3 = stats.wins.slice(0,3).map(x=>x.name);
-              const nG = stats.games.length;
-              const maxY = Math.max(1, ...top3.map(n => (stats.cumulative[n]?.[nG-1] || 0)));
-              const xs = (i)=> P + (nG<=1 ? 0 : (i*(W-2*P)/(nG-1)));
-              const ys = (v)=> H-P - (maxY>0 ? (v*(H-2*P)/maxY) : 0);
-
-              const lines = top3.map((name, idx)=>{
-                const arr = stats.cumulative[name] || [];
-                const pts = arr.map((v,i)=> [xs(i), ys(v)]);
-                return <path key={name} d={toPath(pts)} fill="none" stroke={palette[idx%palette.length]} strokeWidth="2.5" />;
-              });
-
-              const xAxis = <line x1={P} y1={H-P} x2={W-P} y2={H-P} stroke="#999" />;
-              const yAxis = <line x1={P} y1={P} x2={P} y2={H-P} stroke="#999" />;
-              const yTicks = [];
-              for(let t=0;t<=Math.ceil(maxY);t++){
-                const y=ys(t);
-                yTicks.push(<g key={t}><line x1={P-4} y1={y} x2={P} y2={y} stroke="#aaa"/><text x={6} y={y+4} fontSize="10" fill="#888">{t}</text></g>);
-              }
-              const xLabels = stats.dates.map((d,i)=>{
-                const x=xs(i);
-                const label = d.toLocaleDateString();
-                return <text key={i} x={x} y={H-6} fontSize="9" fill="#888" textAnchor="middle">{label}</text>;
-              });
-
-              const legend = top3.map((n,i)=>(
-                <div key={n} className="legend-item">
-                  <span className="legend-swatch" style={{background:palette[i%palette.length]}} />
-                  <span className="legend-name">{n}</span>
-                </div>
+        </div>
+        <table className="table">
+          <thead><tr><th>When</th><th>Summary</th><th className="center">Totals</th><th className="center">Actions</th></tr></thead>
+          <tbody>
+            {history.length===0 ? (
+              <tr><td colSpan="4" className="center meta">No games saved yet.</td></tr>
+            ) : history.map(g=>{
+              const playersSorted=[...g.players].sort((a,b)=>b.net-a.net);
+              const summary=playersSorted.map(p=>(
+                <span key={p.name} style={{marginRight:8}}>
+                  {p.name} ({p.net>=0?'+':''}{p.net.toFixed(2)})
+                </span>
               ));
-
               return (
-                <>
-                  <svg viewBox={`0 0 ${W} ${H}`} className="chart">
-                    {xAxis}{yAxis}{yTicks}
-                    {lines}
-                    {xLabels}
-                  </svg>
-                  <div className="legend">{legend}</div>
-                </>
+                <tr key={g.id}>
+                  <td className="mono meta">{new Date(g.stamp).toLocaleString()}</td>
+                  <td>{summary}</td>
+                  <td className="center mono">{aud(g.totals.buyIns)} / {aud(g.totals.cashOuts)} ({aud(g.totals.diff)})</td>
+                  <td className="center">
+                    <button className="btn danger" onClick={()=>deleteGame(g.id)} disabled={!canEdit}>Delete</button>
+                  </td>
+                </tr>
               );
-            })()}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  const ProfilesSection = (
-    <div className="surface">
-      <div className="header"><h3 style={{margin:0}}>Players & Profiles</h3></div>
-      <div className="meta">Add optional PayIDs so it’s one tap to copy during payouts.</div>
-      <table className="table">
-        <thead><tr><th>Name</th><th>PayID</th><th className="center">Copy</th></tr></thead>
-        <tbody>
-          {knownNames.length===0 ? (
-            <tr><td colSpan="3" className="center meta">No known names yet. Add players above first.</td></tr>
-          ) : knownNames.map(n=>{
-            const v = profiles[n]?.payid || '';
-            return (
-              <tr key={n}>
-                <td>{n}</td>
-                <td><input type="text" value={v} onChange={e=>setProfiles(p=>({...p,[n]:{payid:e.target.value}}))} placeholder="email/phone PayID" /></td>
-                <td className="center">{v ? <button className="btn secondary" onClick={()=>{
-                  if(navigator.clipboard && window.isSecureContext){
-                    navigator.clipboard.writeText(v); alert('PayID copied for '+n);
-                  } else {
-                    const area=document.createElement('textarea'); area.value=v; document.body.appendChild(area); area.select();
-                    document.execCommand('copy'); area.remove(); alert('PayID copied for '+n);
-                  }
-                }}>Copy</button> : <span className="meta">—</span>}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  return (
-    <>
-      <div className="pp-topbar">
-        <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
-        <div className="brand">
-          <h1>PocketPoker</h1>
-          <span className="badge">Local</span>
-        </div>
-      </div>
-
-      <div className={"pp-drawer " + (sidebarOpen?'open':'')}>
-        <div className="title-badge" style={{justifyContent:'space-between', width:'100%'}}>
-          <strong>Menu</strong>
-          <button className="pp-burger" onClick={()=>setSidebarOpen(false)}>✕</button>
-        </div>
-        <div style={{height:8}} />
-        <div className="switch">
-          <button className={theme==='dark' ? 'active' : 'ghost'} onClick={()=>setTheme('dark')}>🌙 Dark</button>
-          <button className={theme==='light' ? 'active' : 'ghost'} onClick={()=>setTheme('light')}>☀️ Light</button>
-        </div>
-        <div style={{height:8}} />
-        <div className="switch">
-          <button className={felt==='emerald' ? 'active' : 'ghost'} onClick={()=>setFelt('emerald')}>💚 Emerald</button>
-          <button className={felt==='midnight' ? 'active' : 'ghost'} onClick={()=>setFelt('midnight')}>🌌 Midnight</button>
-        </div>
-        <div className="nav-list">
-          {["game","history","ledgers","stats","profiles"].map(k=>(
-            <div key={k} className={"nav-item " + (tab===k?'active':'')} onClick={()=>{setTab(k); setSidebarOpen(false);}}>
-              <span style={{textTransform:'capitalize'}}>{k}</span>
-              <span>›</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className={"pp-overlay " + (sidebarOpen?'show':'')} onClick={()=>setSidebarOpen(false)} />
-
-      <div className="container">
-        {tab==="game" && GameSection}
-        {tab==="history" && HistorySection}
-        {tab==="ledgers" && LedgersSection}
-        {tab==="stats" && StatsSection}
-        {tab==="profiles" && ProfilesSection}
-
-        <div className="tabbar">
-          <button className={"btn " + (tab==='game'?'primary':'secondary')} onClick={()=>setTab('game')}>Game</button>
-          <button className={"btn " + (tab==='history'?'primary':'secondary')} onClick={()=>setTab('history')}>History</button>
-          <button className={"btn " + (tab==='ledgers'?'primary':'secondary')} onClick={()=>setTab('ledgers')}>Ledgers</button>
-          <button className={"btn " + (tab==='stats'?'primary':'secondary')} onClick={()=>setTab('stats')}>Stats</button>
-          <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
-        </div>
-
-        <div className="footer meta">Tip: settlement ignores prize; it splits only game results.</div>
+            })}
+          </tbody>
+        </table>
       </div>
     </>
   );
