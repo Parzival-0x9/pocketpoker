@@ -1,54 +1,69 @@
-export const config = { runtime: "edge" };
-const REST_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const REST_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-async function redis(command, ...args) {
-  if (!REST_URL || !REST_TOKEN) throw new Error("Missing Upstash REST env vars");
-  const url = REST_URL.replace(/\/$/, "") + "/" + [command, ...args.map(a => encodeURIComponent(String(a)))].join("/");
-  const res = await fetch(url, { method: "GET", headers: { Authorization: `Bearer ${REST_TOKEN}` } });
-  if (!res.ok) throw new Error(`Upstash error: ${res.status} ${await res.text()}`);
-  const data = await res.json(); return data.result;
+// src/lib/lock.js
+export const WHOAMI_KEY = "pp_whoami";
+
+export function getWhoAmI(){
+  try{ return localStorage.getItem(WHOAMI_KEY) || ""; }catch{ return ""; }
 }
-function brisbaneNextMidnightISO() {
-  const now = new Date(); const brisbaneMs = now.getTime() + 10 * 60 * 60 * 1000;
-  const b = new Date(brisbaneMs);
-  const next = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate() + 1, 14, 0, 0));
-  return next.toISOString();
+export function setWhoAmI(name){
+  try{
+    if(name) localStorage.setItem(WHOAMI_KEY, String(name));
+    else localStorage.removeItem(WHOAMI_KEY);
+  }catch{}
 }
-function isExpiredLock(lock) { return !!(lock?.expiresAt && Date.now() >= Date.parse(lock.expiresAt)); }
-function auditPush(doc, entry) { doc.audit = Array.isArray(doc.audit) ? doc.audit : []; doc.audit.unshift({ ts: new Date().toISOString(), ...entry }); if (doc.audit.length > 200) doc.audit.length = 200; }
 
-export default async function handler(req) {
-  try {
-    if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
-    const body = await req.json();
-    const id = body?.seasonId || process.env.SEASON_ID || "default";
-    const action = String(body?.action||"").toLowerCase();
-    const byName = body?.byName || req.headers.get("x-client-name") || "Unknown";
-    const deviceId = body?.deviceId || req.headers.get("x-client-id") || "unknown";
-    const key = `season:${id}`;
-
-    let doc = await redis("GET", key);
-    doc = doc ? JSON.parse(doc) : { seasonId: id, version: 0, updatedAt: new Date().toISOString(), games: [], lock: null, audit: [], profiles: {} };
-
-    if (doc.lock && isExpiredLock(doc.lock)) doc.lock = null;
-
-    if (action === "lock") {
-      if (doc.lock) return new Response(JSON.stringify({ error: "Already locked by " + (doc.lock.byName||"Host"), lock: doc.lock }), { status: 423, headers: { "content-type":"application/json" } });
-      doc.lock = { byName, deviceId, at: new Date().toISOString(), expiresAt: brisbaneNextMidnightISO() };
-      auditPush(doc, { action:"lock", byName, deviceId });
-      await redis("SET", key, JSON.stringify(doc));
-      return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type":"application/json" } });
-    } else if (action === "unlock") {
-      if (!doc.lock) return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type":"application/json" } });
-      if (doc.lock.deviceId !== deviceId) return new Response(JSON.stringify({ error: "Only locker can unlock.", lock: doc.lock }), { status: 423, headers: { "content-type":"application/json" } });
-      auditPush(doc, { action:"unlock", byName, deviceId });
-      doc.lock = null;
-      await redis("SET", key, JSON.stringify(doc));
-      return new Response(JSON.stringify(doc), { status: 200, headers: { "content-type":"application/json" } });
-    } else {
-      return new Response(JSON.stringify({ error:"Unknown action" }), { status: 400, headers: { "content-type":"application/json" } });
-    }
-  } catch (e) {
-    return new Response(JSON.stringify({ error: e.message || "server error" }), { status: 500, headers: { "content-type":"application/json" } });
+/**
+ * Show a lightweight modal to choose a locker from current players.
+ * Returns Promise<string|null>
+ */
+export function chooseLocker(names){
+  if(!Array.isArray(names) || names.length===0){
+    const v = prompt("No named players yet. Enter a name to lock as:");
+    return Promise.resolve(v && v.trim() ? v.trim() : null);
   }
+  return new Promise((resolve)=>{
+    const root = document.createElement("div");
+    root.className = "pp-choose-locker-root";
+    root.innerHTML = `
+      <div class="ppcl-backdrop"></div>
+      <div class="ppcl-card">
+        <div class="ppcl-title">Activate Host Lock</div>
+        <div class="ppcl-list">
+          ${names.map(n=>`<button class="ppcl-opt" data-name="${n}">${n}</button>`).join("")}
+        </div>
+        <div class="ppcl-actions">
+          <button class="ppcl-cancel">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(root);
+
+    const cleanup = (val=null)=>{
+      root.remove();
+      resolve(val);
+    };
+    root.querySelector(".ppcl-backdrop").addEventListener("click", ()=>cleanup(null));
+    root.querySelector(".ppcl-cancel").addEventListener("click", ()=>cleanup(null));
+    root.querySelectorAll(".ppcl-opt").forEach(btn=>{
+      btn.addEventListener("click", ()=> cleanup(btn.dataset.name));
+    });
+  });
 }
+
+// Inline styles
+(function injectStyles(){
+  const css = `
+  .pp-choose-locker-root{position:fixed;inset:0;z-index:5000;display:flex;align-items:center;justify-content:center}
+  .ppcl-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
+  .ppcl-card{position:relative;background:var(--surface,#1f2937);color:inherit;border-radius:14px;padding:14px;width:min(92vw,420px);box-shadow:0 10px 30px rgba(0,0,0,.3)}
+  .ppcl-title{font-weight:700;margin-bottom:8px}
+  .ppcl-list{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;max-height:240px;overflow:auto}
+  .ppcl-opt{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05);cursor:pointer}
+  .ppcl-opt:hover{filter:brightness(1.1)}
+  .ppcl-actions{display:flex;justify-content:flex-end;margin-top:10px}
+  .ppcl-cancel{padding:8px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:transparent;color:inherit;cursor:pointer}
+  `;
+  try{
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.appendChild(style);
+  }catch{}
+})();
