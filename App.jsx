@@ -1,8 +1,8 @@
 // App.jsx — Phase 2A (stable) + Equal-Split + Profiles Sync + Per-Head Payments
 // Keeps core sections: Game, History, Ledgers, Stats, Profiles. No JSX <style> blocks.
 import React, { useMemo, useState, useEffect } from "react";
-import PlayerRow from "./PlayerRow.jsx";
-import { aud, sum, round2, settle, toCSV } from "./calc.js";
+import PlayerRow from "./components/PlayerRow.jsx";
+import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
 
 // ===== Cloud config =====
 const API_BASE = ""; // same origin
