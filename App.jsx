@@ -203,8 +203,8 @@ export default function App(){
     localStorage.setItem(FELT, felt);
   }, [felt]);
 
-// Totals (uses equal-split per-loser for txns; ignores prize when splitting)
-const totals = useMemo(() => {
+  // Totals (uses equal-split per-loser for txns; ignores prize when splitting)
+  const totals = useMemo(() => {
   const base = players.map(p => ({
     ...p,
     buyInTotal: round2(p.buyIns * buyInAmount),
@@ -215,88 +215,74 @@ const totals = useMemo(() => {
     net: round2(p.baseCash - p.buyIns * buyInAmount)
   }));
 
-  // Prize-from-pot adjusts display (netAdj/cashOutAdj); settlement ignores prize
+  // Prize-from-pot adjustments are applied to displayed net/cashOutAdj,
+  // but equal-split uses game-only net (withNet) as the basis.
   let adjusted = withNet.map(p => ({
     ...p,
     prize: 0,
     cashOutAdj: round2(p.baseCash),
     netAdj: round2(p.baseCash - p.buyIns * buyInAmount)
   }));
+    
+    if (prizeFromPot && players.length>=2) {
+      const N = adjusted.length;
+      const topNet = Math.max(...withNet.map(p=>p.net));
+      const winnersArr = withNet.filter(p=> Math.abs(p.net - topNet) < 0.0001);
+      const winnerNames = winnersArr.map(p=> p.name || "Player");
+      const T = winnersArr.length;
+      const pool = round2(prizeAmount * N);
+      const perWinner = T>0 ? round2(pool / T) : 0;
 
-  if (prizeFromPot && players.length >= 2) {
-    const N = adjusted.length;
-    const topNet = Math.max(...withNet.map(p => p.net));
-    const winnersArr = withNet.filter(p => Math.abs(p.net - topNet) < 0.0001);
-    const winnerNames = winnersArr.map(p => p.name || "Player");
-    const T = winnersArr.length;
-    const pool = round2(prizeAmount * N);
-    const perWinner = T > 0 ? round2(pool / T) : 0;
-
-    // Deduct prize from everyone
-    adjusted = adjusted.map(p => {
-      const cash = round2(p.baseCash - prizeAmount);
-      return {
-        ...p,
-        prize: round2(-prizeAmount),
-        cashOutAdj: cash,
-        netAdj: round2(cash - p.buyIns * buyInAmount)
-      };
-    });
-
-    // Optional single-winner override if there's a tie
-    const tieName =
-      typeof prizeTieWinner === "string" && prizeTieWinner ? prizeTieWinner : null;
-    const useSingle = T > 1 && tieName && winnerNames.includes(tieName);
-
-    if (useSingle) {
-      adjusted = adjusted.map(p => {
-        if ((p.name || "Player") === tieName) {
-          const cash = round2(p.cashOutAdj + pool);
-          return {
-            ...p,
-            prize: round2(p.prize + pool),
-            cashOutAdj: cash,
-            netAdj: round2(cash - p.buyIns * buyInAmount)
-          };
-        }
-        return p;
+      // Deduct prize from everyone first
+      adjusted = adjusted.map(p=>{
+        const cash = round2(p.baseCash - prizeAmount);
+        return {...p, prize: round2(-prizeAmount), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
       });
-    } else {
-      // Default behavior: split pool equally among all top winners
-      let distributed = 0,
-        idx = 0;
-      adjusted = adjusted.map(p => {
-        if (Math.abs((p.baseCash - p.buyIns * buyInAmount) - topNet) < 0.0001) {
-          const isLast = idx === T - 1;
-          const give = isLast ? round2(pool - distributed) : perWinner;
-          distributed = round2(distributed + give);
-          const cash = round2(p.cashOutAdj + give);
-          idx++;
-          return {
-            ...p,
-            prize: round2(p.prize + give),
-            cashOutAdj: cash,
-            netAdj: round2(cash - p.buyIns * buyInAmount)
-          };
-        }
+
+      // If there's a tie and an override winner is chosen, give full pool to that one
+      const useSingle = (T > 1) && (prizeTieWinner && winnerNames.includes(prizeTieWinner));
+      if (useSingle) {
+        adjusted = adjusted.map(p=>{
+          if ((p.name || "Player") === prizeTieWinner) {
+            const cash = round2(p.cashOutAdj + pool);
+            return {...p, prize: round2(p.prize + pool), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+          }
+          return p;
+        });
+      } else {
+        // Default behavior: split pool equally among all top winners
+        let distributed = 0, idx = 0;
+        adjusted = adjusted.map(p=>{
+          if (Math.abs((p.baseCash - p.buyIns*buyInAmount) - topNet) < 0.0001) {
+            const isLast = idx === T-1;
+            const give = isLast ? round2(pool - distributed) : perWinner;
+            distributed = round2(distributed + give);
+            const cash = round2(p.cashOutAdj + give);
+            idx++;
+            return {...p, prize: round2(p.prize + give), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+          }
+          return p;
+        });
+      }
+    }
+
         return p;
       });
     }
-  }
 
-  const buyInSum = round2(sum(adjusted.map(p => p.buyInTotal)));
-  const cashAdjSum = round2(sum(adjusted.map(p => p.cashOutAdj)));
-  const diff = round2(cashAdjSum - buyInSum);
+    const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
+    const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
+    const diff = round2(cashAdjSum - buyInSum);
 
-  // Equal-split ignores prize; use original game-only net as basis
-  const basis = withNet.map(p => ({ name: p.name || "Player", net: p.net }));
-  const txns = settleEqualSplitCapped(basis);
+    // Equal-split ignores prize; use original withNet for basis
+    const basis = withNet.map(p=>({ name: p.name || "Player", net: p.net }));
+    const txns = settleEqualSplitCapped(basis);
 
-  const sorted = [...adjusted].sort((a, b) => b.netAdj - a.netAdj);
-  const top = sorted.length ? sorted[0] : null;
+    const sorted = [...adjusted].sort((a,b)=>b.netAdj-a.netAdj);
+    const top = sorted.length ? sorted[0] : null;
 
-  return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
-}, [players, buyInAmount, prizeFromPot, prizeAmount]);
+    return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
+  }, [players, buyInAmount, prizeFromPot, prizeAmount]);
 
   function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
   const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
