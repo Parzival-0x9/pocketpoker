@@ -1,14 +1,24 @@
 // /api/season/profile-upsert.js
-export const config = { runtime: "edge" };
+export const config = { runtime: "nodejs" };
 import { Redis } from "@upstash/redis";
 
 const redis = Redis.fromEnv();
 const KEY = (id)=> `pp:season:${id||"default"}`;
 
-export default async function handler(req){
+function sendJson(res, code, obj){
+  res.status(code).setHeader("Content-Type","application/json");
+  res.end(JSON.stringify(obj));
+}
+async function readJson(req){
+  const chunks=[]; for await (const c of req) chunks.push(c);
+  const body = Buffer.concat(chunks).toString("utf8");
+  return body?JSON.parse(body):{};
+}
+
+export default async function handler(req, res){
   try{
-    const { seasonId="default", name, payid=null, avatar=null } = await req.json();
-    if (!name || typeof name !== "string") return new Response("Missing name", {status:400});
+    const { seasonId="default", name, payid=null, avatar=null } = await readJson(req);
+    if (!name || typeof name !== "string") return res.status(400).send("Missing name");
 
     const key = KEY(seasonId);
     const doc = await redis.get(key) || { version:0, games:[], profiles:{} };
@@ -17,8 +27,8 @@ export default async function handler(req){
 
     const next = { ...doc, profiles, version: Number(doc.version||0)+1, updatedAt: new Date().toISOString() };
     await redis.set(key, next);
-    return new Response(JSON.stringify(next), { status: 200, headers: { "Content-Type":"application/json" } });
+    sendJson(res, 200, next);
   }catch(e){
-    return new Response(String(e?.message||e), { status: 500 });
+    res.status(500).send(String(e?.message||e));
   }
 }
