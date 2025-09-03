@@ -1,6 +1,6 @@
 // App.jsx — Phase 2A (stable) + Equal-Split + Profiles Sync + Per-Head Payments
 // Keeps core sections: Game, History, Ledgers, Stats, Profiles. No JSX <style> blocks.
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
 
@@ -56,6 +56,8 @@ export default function App(){
   const [prizeFromPot,setPrizeFromPot]=useState(true);
   const [prizeAmount,setPrizeAmount]=useState(DEFAULT_PRIZE);
   const [overrideMismatch,setOverrideMismatch]=useState(false);
+  const nameUpsertTimers = useRef({});
+
 
   // --- Cloud doc
   const [history,setHistory]=useState([]);
@@ -125,15 +127,27 @@ export default function App(){
       throw e;
     }
   }
-  async function apiProfileUpsert({name, payid, avatar}){
+  async function apiProfileUpsert({ name, payid, avatar, payId, avatarDataUrl }){
+    // Build payload supporting both old (payid, avatar) and new (payId, avatarDataUrl) keys
+    const payload = { seasonId: SEASON_ID, name };
+    if ((payId ?? payid) != null && (payId ?? payid) !== "") payload.payId = (payId ?? payid);
+    if ((avatarDataUrl ?? avatar) != null) payload.avatarDataUrl = (avatarDataUrl ?? avatar);
+
     const res = await fetch(`${API_BASE}/api/season/profile-upsert`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seasonId: SEASON_ID, name, payid, avatar })
+      body: JSON.stringify(payload)
     });
     if (!res.ok) { alert(await res.text()); return; }
-    const doc = await res.json().catch(()=>null);
-    if (doc) hydrateFromDoc(doc);
+    const json = await res.json().catch(()=>null);
+    if (!json) return;
+
+    // Accept either a full season doc or a partial {profiles}
+    if (typeof json.version === "number") {
+      hydrateFromDoc(json);
+    } else if (json.profiles) {
+      setProfiles(json.profiles);
+    }
   }
   async function apiMarkPayment({gameId, payer, paid, method}){
     const res = await fetch(`${API_BASE}/api/season/mark-payment`, {
@@ -251,10 +265,27 @@ export default function App(){
     return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
   }, [players, buyInAmount, prizeFromPot, prizeAmount]);
 
-  function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
-  const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
-  const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setOverrideMismatch(false); };
-  const resetGame=()=>{ setPlayers([blank(),blank()]); setOverrideMismatch(false); };
+  function updatePlayer(u){
+  setPlayers(ps => {
+    const prev = ps.find(p => p.id === u.id);
+    const nameChanged = prev && (prev.name || "") !== (u.name || "");
+    const next = u?._remove ? ps.filter(p => p.id !== u.id) : ps.map(p => p.id === u.id ? u : p);
+
+    // If name changed to a non-empty trimmed value, upsert after a short debounce
+    const trimmed = (u.name || "").trim();
+    if (nameChanged && trimmed.length >= 2) {
+      // clear any pending timer for this player
+      const t = nameUpsertTimers.current[u.id];
+      if (t) clearTimeout(t);
+      nameUpsertTimers.current[u.id] = setTimeout(() => {
+        apiProfileUpsert({ name: trimmed }); // syncs new name across devices
+        delete nameUpsertTimers.current[u.id];
+      }, 350);
+    }
+    return next;
+  });
+}
+
 
   async function saveGameToHistory(){
     const stamp = new Date().toISOString();
