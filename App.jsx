@@ -62,6 +62,7 @@ export default function App(){
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [cloudVersion,setCloudVersion]=useState(0);
   const [syncStatus,setSyncStatus]=useState("idle"); // idle|syncing|upToDate|error
+  const [draftStamp,setDraftStamp]=useState(0);
 
   // drafts for Profiles UI
   const [profileDrafts, setProfileDrafts] = useState({}); // { [name]: {payid?, avatar?} }
@@ -125,6 +126,19 @@ export default function App(){
       throw e;
     }
   }
+  async function apiDraftSave(payload){
+    try{
+      const res = await fetch(`${API_BASE}/api/season/draft-save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seasonId: SEASON_ID, ...payload })
+      });
+      // no doc hydration here; other devices will pick up draft on refresh/load
+      if (!res.ok) console.warn("draft-save failed:", await res.text());
+    }catch(e){
+      console.warn("draft-save error:", e);
+    }
+  }
   async function apiProfileUpsert({name, payid, avatar}){
     const res = await fetch(`${API_BASE}/api/season/profile-upsert`, {
       method: "POST",
@@ -150,6 +164,16 @@ export default function App(){
     if (doc && typeof doc.version === "number") setCloudVersion(doc.version);
     if (doc && Array.isArray(doc.games)) setHistory(doc.games);
     if (doc && doc.profiles && typeof doc.profiles === 'object') setProfiles(doc.profiles);
+
+    // NEW: apply live draft if it's newer than our local draftStamp
+    const d = doc && doc.draft;
+    if (d && typeof d.stamp === "number" && d.stamp > draftStamp) {
+      if (Array.isArray(d.players) && d.players.length > 0) setPlayers(d.players);
+      if (typeof d.buyInAmount === "number") setBuyInAmount(d.buyInAmount);
+      if (typeof d.prizeFromPot === "boolean") setPrizeFromPot(d.prizeFromPot);
+      if (typeof d.prizeAmount === "number") setPrizeAmount(d.prizeAmount);
+      setDraftStamp(d.stamp);
+    }
   }
 
   async function refreshSeason(){
@@ -201,6 +225,22 @@ export default function App(){
     document.documentElement.setAttribute('data-felt', felt==='midnight'?'midnight':'emerald');
     localStorage.setItem(FELT, felt);
   }, [felt]);
+  useEffect(()=>{
+    // Debounced live draft push (500ms)
+    const stamp = Date.now();
+    setDraftStamp(stamp);
+    const payload = {
+      draft: {
+        stamp,
+        players,
+        buyInAmount,
+        prizeFromPot,
+        prizeAmount
+      }
+    };
+    const t = setTimeout(()=> { apiDraftSave(payload); }, 500);
+    return ()=> clearTimeout(t);
+  }, [players, buyInAmount, prizeFromPot, prizeAmount]);
 
   // Totals (uses equal-split per-loser for txns; ignores prize when splitting)
   const totals=useMemo(()=>{
