@@ -1,6 +1,8 @@
+// App.jsx — Phase 2A (stable) + Equal-Split + Profiles Sync + Per-Head Payments
+// Keeps core sections: Game, History, Ledgers, Stats, Profiles. No JSX <style> blocks.
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
-import { aud, sum, round2, toCSV } from "./lib/calc.js";
+import { aud, sum, round2, settle, toCSV } from "./lib/calc.js";
 
 // ===== Cloud config =====
 const API_BASE = ""; // same origin
@@ -53,7 +55,6 @@ export default function App(){
   const [buyInAmount,setBuyInAmount]=useState(DEFAULT_BUYIN);
   const [prizeFromPot,setPrizeFromPot]=useState(true);
   const [prizeAmount,setPrizeAmount]=useState(DEFAULT_PRIZE);
-  const [prizeTieWinner, setPrizeTieWinner] = useState(""); // "" => split equally
   const [overrideMismatch,setOverrideMismatch]=useState(false);
 
   // --- Cloud doc
@@ -61,6 +62,7 @@ export default function App(){
   const [profiles,setProfiles]=useState(()=>{ try{ return JSON.parse(localStorage.getItem(PROFILES)) || {}; } catch { return {}; } });
   const [cloudVersion,setCloudVersion]=useState(0);
   const [syncStatus,setSyncStatus]=useState("idle"); // idle|syncing|upToDate|error
+  const [draftStamp,setDraftStamp]=useState(0);
 
   // drafts for Profiles UI
   const [profileDrafts, setProfileDrafts] = useState({}); // { [name]: {payid?, avatar?} }
@@ -88,14 +90,13 @@ export default function App(){
         body: JSON.stringify({ seasonId: SEASON_ID, game })
       });
       if (res.status === 429) { alert("Too many saves, try again in a moment."); throw new Error("429"); }
-      if (res.status === 409) { throw new Error("409"); }
       if(!res.ok) throw new Error(await res.text());
       return await res.json();
     };
     try{
       return await tryPost(cloudVersion);
     }catch(e){
-      if (String(e.message||"") === "409") {
+      if (String(e).includes("409") || String(e.message||"").includes("409")) {
         const doc = await apiGetSeason();
         hydrateFromDoc(doc);
         return await tryPost(doc.version || 0);
@@ -111,19 +112,31 @@ export default function App(){
         body: JSON.stringify({ seasonId: SEASON_ID, gameId })
       });
       if (res.status === 429) { alert("Too many saves, try again in a moment."); throw new Error("429"); }
-      if (res.status === 409) { throw new Error("409"); }
       if(!res.ok) throw new Error(await res.text());
       return await res.json();
     };
     try{
       return await tryPost(cloudVersion);
     }catch(e){
-      if (String(e.message||"") === "409") {
+      if (String(e).includes("409") || String(e.message||"").includes("409")) {
         const doc = await apiGetSeason();
         hydrateFromDoc(doc);
         return await tryPost(doc.version || 0);
       }
       throw e;
+    }
+  }
+  async function apiDraftSave(payload){
+    try{
+      const res = await fetch(`${API_BASE}/api/season/draft-save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seasonId: SEASON_ID, ...payload })
+      });
+      // no doc hydration here; other devices will pick up draft on refresh/load
+      if (!res.ok) console.warn("draft-save failed:", await res.text());
+    }catch(e){
+      console.warn("draft-save error:", e);
     }
   }
   async function apiProfileUpsert({name, payid, avatar}){
@@ -147,34 +160,19 @@ export default function App(){
     if (doc) hydrateFromDoc(doc);
   }
 
-  // --- DRAFT SAVE (sync live game state across devices) ---
-  async function apiDraftSave(draft){
-    try{
-      const res = await fetch(`${API_BASE}/api/season/draft-save`, {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({ seasonId: SEASON_ID, draft })
-      });
-      if (!res.ok) return; // best-effort
-      const doc = await res.json().catch(()=>null);
-      if (doc) hydrateFromDoc(doc); // bump version so next save won't 409
-    }catch(e){
-      console.warn("draft-save failed", e); // best-effort
-    }
-  }
-
   function hydrateFromDoc(doc){
     if (doc && typeof doc.version === "number") setCloudVersion(doc.version);
     if (doc && Array.isArray(doc.games)) setHistory(doc.games);
     if (doc && doc.profiles && typeof doc.profiles === 'object') setProfiles(doc.profiles);
 
-    // --- hydrate live draft (so other devices see edits after Refresh) ---
-    if (doc?.draft && typeof doc.draft === "object") {
-      if (Array.isArray(doc.draft.players)) setPlayers(doc.draft.players);
-      if (typeof doc.draft.buyInAmount === "number") setBuyInAmount(doc.draft.buyInAmount);
-      if (typeof doc.draft.prizeFromPot === "boolean") setPrizeFromPot(doc.draft.prizeFromPot);
-      if (typeof doc.draft.prizeAmount === "number") setPrizeAmount(doc.draft.prizeAmount);
-      if (typeof doc.draft.prizeTieWinner === "string") setPrizeTieWinner(doc.draft.prizeTieWinner || "");
+    // NEW: apply live draft if it's newer than our local draftStamp
+    const d = doc && doc.draft;
+    if (d && typeof d.stamp === "number" && d.stamp > draftStamp) {
+      if (Array.isArray(d.players) && d.players.length > 0) setPlayers(d.players);
+      if (typeof d.buyInAmount === "number") setBuyInAmount(d.buyInAmount);
+      if (typeof d.prizeFromPot === "boolean") setPrizeFromPot(d.prizeFromPot);
+      if (typeof d.prizeAmount === "number") setPrizeAmount(d.prizeAmount);
+      setDraftStamp(d.stamp);
     }
   }
 
@@ -219,20 +217,6 @@ export default function App(){
     try{ localStorage.setItem(PROFILES, JSON.stringify(profiles)); }catch{}
   }, [profiles]);
 
-  // --- Debounced draft sync: push live game state to server ---
-  useEffect(()=>{
-    const t = setTimeout(()=>{
-      apiDraftSave({
-        players,
-        buyInAmount,
-        prizeFromPot,
-        prizeAmount,
-        prizeTieWinner, // include the tie-winner override so it syncs too
-      });
-    }, 500);
-    return ()=>clearTimeout(t);
-  }, [players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner]);
-
   useEffect(()=>{
     document.documentElement.setAttribute('data-theme', theme==='light'?'light':'dark');
     localStorage.setItem(THEME, theme);
@@ -241,124 +225,83 @@ export default function App(){
     document.documentElement.setAttribute('data-felt', felt==='midnight'?'midnight':'emerald');
     localStorage.setItem(FELT, felt);
   }, [felt]);
+  useEffect(()=>{
+    // Debounced live draft push (500ms)
+    const stamp = Date.now();
+    setDraftStamp(stamp);
+    const payload = {
+      draft: {
+        stamp,
+        players,
+        buyInAmount,
+        prizeFromPot,
+        prizeAmount
+      }
+    };
+    const t = setTimeout(()=> { apiDraftSave(payload); }, 500);
+    return ()=> clearTimeout(t);
+  }, [players, buyInAmount, prizeFromPot, prizeAmount]);
 
   // Totals (uses equal-split per-loser for txns; ignores prize when splitting)
-  const totals = useMemo(() => {
-    const base = players.map(p => ({
-      ...p,
-      buyInTotal: round2(p.buyIns * buyInAmount),
-      baseCash: p.cashOut
-    }));
-    const withNet = base.map(p => ({
-      ...p,
-      net: round2(p.baseCash - p.buyIns * buyInAmount)
-    }));
+  const totals=useMemo(()=>{
+    const base=players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
+    const withNet=base.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
-    // Prize-from-pot adjusts display (netAdj/cashOutAdj); settlement ignores prize
-    let adjusted = withNet.map(p => ({
-      ...p,
-      prize: 0,
-      cashOutAdj: round2(p.baseCash),
-      netAdj: round2(p.baseCash - p.buyIns * buyInAmount)
-    }));
+    // Prize-from-pot adjustments are applied to displayed net/cashOutAdj, but equal-split uses base net
+    let adjusted = withNet.map(p=>({...p, prize:0, cashOutAdj:round2(p.baseCash), netAdj: round2(p.baseCash - p.buyIns*buyInAmount)}));
 
-    if (prizeFromPot && players.length >= 2) {
+    if (prizeFromPot && players.length>=2) {
       const N = adjusted.length;
-      const topNet = Math.max(...withNet.map(p => p.net));
-      const winnersArr = withNet.filter(p => Math.abs(p.net - topNet) < 0.0001);
-      const winnerNames = winnersArr.map(p => p.name || "Player");
-      const T = winnersArr.length;
+      const topNet = Math.max(...withNet.map(p=>p.net));
+      const winners = withNet.filter(p=> Math.abs(p.net - topNet) < 0.0001);
+      const T = winners.length;
       const pool = round2(prizeAmount * N);
-      const perWinner = T > 0 ? round2(pool / T) : 0;
+      const perWinner = T>0 ? round2(pool / T) : 0;
 
-      // Deduct prize from everyone first
-      adjusted = adjusted.map(p => {
+      adjusted = adjusted.map(p=>{
         const cash = round2(p.baseCash - prizeAmount);
-        return {
-          ...p,
-          prize: round2(-prizeAmount),
-          cashOutAdj: cash,
-          netAdj: round2(cash - p.buyIns * buyInAmount)
-        };
+        return {...p, prize: round2(-prizeAmount), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
       });
 
-      // If there's a tie and an override winner is chosen, give full pool to that one
-      const tieName =
-        typeof prizeTieWinner === "string" && prizeTieWinner ? prizeTieWinner : null;
-      const useSingle = T > 1 && tieName && winnerNames.includes(tieName);
-
-      if (useSingle) {
-        adjusted = adjusted.map(p => {
-          if ((p.name || "Player") === tieName) {
-            const cash = round2(p.cashOutAdj + pool);
-            return {
-              ...p,
-              prize: round2(p.prize + pool),
-              cashOutAdj: cash,
-              netAdj: round2(cash - p.buyIns * buyInAmount)
-            };
-          }
-          return p;
-        });
-      } else {
-        // Default behavior: split pool equally among all top winners
-        let distributed = 0, idx = 0;
-        adjusted = adjusted.map(p => {
-          if (Math.abs((p.baseCash - p.buyIns * buyInAmount) - topNet) < 0.0001) {
-            const isLast = idx === T - 1;
-            const give = isLast ? round2(pool - distributed) : perWinner;
-            distributed = round2(distributed + give);
-            const cash = round2(p.cashOutAdj + give);
-            idx++;
-            return {
-              ...p,
-              prize: round2(p.prize + give),
-              cashOutAdj: cash,
-              netAdj: round2(cash - p.buyIns * buyInAmount)
-            };
-          }
-          return p;
-        });
-      }
+      let distributed = 0, idx = 0;
+      adjusted = adjusted.map(p=>{
+        if (Math.abs((p.baseCash - p.buyIns*buyInAmount) - topNet) < 0.0001) {
+          const isLast = idx === T-1;
+          const give = isLast ? round2(pool - distributed) : perWinner;
+          distributed = round2(distributed + give);
+          const cash = round2(p.cashOutAdj + give);
+          idx++;
+          return {...p, prize: round2(p.prize + give), cashOutAdj: cash, netAdj: round2(cash - p.buyIns*buyInAmount)};
+        }
+        return p;
+      });
     }
 
-    const buyInSum = round2(sum(adjusted.map(p => p.buyInTotal)));
-    const cashAdjSum = round2(sum(adjusted.map(p => p.cashOutAdj)));
+    const buyInSum = round2(sum(adjusted.map(p=> p.buyInTotal)));
+    const cashAdjSum = round2(sum(adjusted.map(p=> p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
 
-    // Equal-split ignores prize; use original game-only net as basis
-    const basis = withNet.map(p => ({ name: p.name || "Player", net: p.net }));
+    // Equal-split ignores prize; use original withNet for basis
+    const basis = withNet.map(p=>({ name: p.name || "Player", net: p.net }));
     const txns = settleEqualSplitCapped(basis);
 
-    const sorted = [...adjusted].sort((a, b) => b.netAdj - a.netAdj);
+    const sorted = [...adjusted].sort((a,b)=>b.netAdj-a.netAdj);
     const top = sorted.length ? sorted[0] : null;
 
     return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
-  }, [players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner]);
+  }, [players, buyInAmount, prizeFromPot, prizeAmount]);
 
-  function updatePlayer(u){
-    setPlayers(ps => u?._remove ? ps.filter(p => p.id !== u.id) : ps.map(p => p.id === u.id ? u : p));
-  }
+  function updatePlayer(u){ setPlayers(ps=> u?._remove ? ps.filter(p=>p.id!==u.id) : ps.map(p=>p.id===u.id?u:p)); }
   const addPlayer=()=>setPlayers(ps=>[...ps,blank()]);
   const startGame=()=>{ setPlayers(ps=>ps.map(p=>({ ...p, buyIns:0, cashOut:0 }))); setOverrideMismatch(false); };
   const resetGame=()=>{ setPlayers([blank(),blank()]); setOverrideMismatch(false); };
 
   async function saveGameToHistory(){
-    // Confirmation prompt
-    const ok = window.confirm(
-      `End game and save?\n\n`+
-      `Players: ${players.length}\n`+
-      `Buy-in: A$${buyInAmount}\n`+
-      `Prize from pot: ${prizeFromPot ? "ON" : "OFF"}${prizeFromPot ? ` (A$${prizeAmount})` : ""}\n\n`+
-      `You can undo by deleting from History later.`
-    );
-    if (!ok) return;
-
     const stamp = new Date().toISOString();
     const g={ id:uid(), stamp,
       settings:{
         buyInAmount,
-        prize: prizeFromPot ? { mode:'pot_all', amount: prizeAmount, tieWinner: prizeTieWinner || null } : { mode:'none', amount: 0, tieWinner: null },
+        prize: prizeFromPot ? { mode:'pot_all', amount: prizeAmount } : { mode:'none', amount: 0 },
         settlement: { mode: 'equalSplit' }
       },
       players: totals.adjusted.map(p=>({
@@ -373,10 +316,9 @@ export default function App(){
       const doc = await apiAppendGame(g);
       hydrateFromDoc(doc);
       setSyncStatus("upToDate");
-      alert("Saved! Check the History tab.");
     }catch(e){
       console.error(e);
-      alert("Save failed. Try Refresh, then save again.");
+      alert("Save failed. You can try Refresh, then Save again.");
       setSyncStatus("error");
     }
   }
@@ -568,25 +510,6 @@ export default function App(){
             <input type="checkbox" checked={prizeFromPot} onChange={e=>setPrizeFromPot(e.target.checked)} /> Prize from pot: A$
           </label>
           <input className="small mono" type="number" min="0" step="1" value={prizeAmount} onChange={e=>setPrizeAmount(Math.max(0,parseFloat(e.target.value||0)))} />
-          {prizeFromPot && (()=>{
-            // detect ties among winners on game-only net
-            const baseTmp = players.map(p=>({...p, buyInTotal:round2(p.buyIns*buyInAmount), baseCash:p.cashOut }));
-            const withNetTmp = baseTmp.map(p=>({...p, net: round2(p.baseCash - p.buyIns*buyInAmount)}));
-            if (withNetTmp.length < 2) return null;
-            const topNetTmp = Math.max(...withNetTmp.map(p=>p.net));
-            const winnersTmp = withNetTmp.filter(p=> Math.abs(p.net - topNetTmp) < 0.0001).map(p=> p.name || "Player");
-            if (winnersTmp.length <= 1) return null;
-            return (
-              <label className="inline">
-                Tie winner override
-                <select value={prizeTieWinner} onChange={e=>setPrizeTieWinner(e.target.value)}>
-                  <option value="">Split equally</option>
-                  {winnersTmp.map(n=> <option key={n} value={n}>{n} (single)</option>)}
-                </select>
-              </label>
-            );
-          })()}
-
           <span className="meta">deduct from all players; split pool among top winners</span>
         </div>
       </div>
