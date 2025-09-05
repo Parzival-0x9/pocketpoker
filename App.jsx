@@ -882,9 +882,27 @@ export default function App(){
                   <tr>
                     <td colSpan="4">
                       <div className="detail">
+
+                        {/* MOBILE COMPACT: no horizontal scroll needed */}
                         <strong>Per-player results</strong>
-                        <table className="table">
-                          <thead><tr><th>Player</th><th className="center">Buy-in</th><th className="center">Cash-out (adj)</th><th className="center">Prize adj</th><th className="center">Net</th></tr></thead>
+                        <table className="table compact">
+                          <thead>
+                            <tr>
+                              <th>PLAYER</th>
+                              <th className="center">
+                                <span className="hdr-long">BUY-IN</span><span className="hdr-short">Buy</span>
+                              </th>
+                              <th className="center">
+                                <span className="hdr-long">CASH-OUT (ADJ)</span><span className="hdr-short">Cash</span>
+                              </th>
+                              <th className="center">
+                                <span className="hdr-long">PRIZE ADJ</span><span className="hdr-short">Prize</span>
+                              </th>
+                              <th className="center">
+                                <span className="hdr-long">NET</span><span className="hdr-short">Net</span>
+                              </th>
+                            </tr>
+                          </thead>
                           <tbody>
                             {playersSorted.map(p=>(
                               <tr key={p.name}>
@@ -1074,6 +1092,27 @@ export default function App(){
 
   return (
     <>
+      {/* MOBILE TABLE COMPACT STYLES (prevent horizontal scroll on tiny screens) */}
+      <style>{`
+        @media (max-width: 420px) {
+          .table.compact { table-layout: fixed; width: 100%; }
+          .table.compact th, .table.compact td { padding: 6px 6px; }
+          .table.compact thead th { font-size: 11px; }
+          .table.compact .mono { font-size: 12px; }
+          .table.compact th:nth-child(1), .table.compact td:nth-child(1) { width: 34%; }   /* Player */
+          .table.compact th:nth-child(2), .table.compact td:nth-child(2) { width: 16.5%; } /* Buy-in */
+          .table.compact th:nth-child(3), .table.compact td:nth-child(3) { width: 20%; }   /* Cash */
+          .table.compact th:nth-child(4), .table.compact td:nth-child(4) { width: 16.5%; } /* Prize */
+          .table.compact th:nth-child(5), .table.compact td:nth-child(5) { width: 13%; }   /* Net */
+          .hdr-long { display: none; }
+          .hdr-short { display: inline; }
+        }
+        @media (min-width: 421px) {
+          .hdr-long { display: inline; }
+          .hdr-short { display: none; }
+        }
+      `}</style>
+
       {/* Topbar with Sync status + Refresh */}
       <div className="pp-topbar">
         <button className="pp-burger" onClick={()=>setSidebarOpen(true)}>☰</button>
@@ -1192,7 +1231,7 @@ export default function App(){
           <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
         </div>
 
-        <div className="footer meta">Tip: settlement shown here is net-of-prize for clarity; Combined = settlement + prize and matches final nets.</div>
+        <div className="footer meta">Tip: settlement shown here is net-of-prize for clarity; Combined = settlement + prize and matches game-only nets.</div>
       </div>
     </>
   );
