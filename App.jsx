@@ -1,9 +1,10 @@
-/* App.jsx — End Game Save Fixes + Confirmation
+/* App.jsx — End Game Save Fixes + Confirmation + Prize Money sub-table
    Includes:
    - Tie-winner override
    - Cross-device draft sync (players, buy-in, prize, override)
    - Proper 409 handling for append/delete
    - Confirmation prompt before saving
+   - NEW: separate "Prize money" table in History Details
 */
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
@@ -491,6 +492,39 @@ export default function App(){
     return out;
   }, [history]);
 
+  // ---- Helper: compute prize money rows for a saved game (display-only) ----
+  function computePrizeRowsForGame(g){
+    const mode = g?.settings?.prize?.mode;
+    if (mode !== 'pot_all') return { rows: [], amount: 0 };
+    const amount = typeof g?.settings?.prize?.amount === 'number' ? g.settings.prize.amount : DEFAULT_PRIZE;
+    const plist = g?.players || [];
+    if (plist.length < 2) return { rows: [], amount };
+
+    // Determine winners by game-only net (net - prize), respect tie override if present
+    const netsGame = plist.map(p=> ({ name: p.name||"Player", netGame: round2((p.net||0) - (p.prize||0)) }));
+    const top = Math.max(...netsGame.map(x=>x.netGame));
+    let winners = netsGame.filter(x => Math.abs(x.netGame - top) < 0.0001).map(x=>x.name);
+    const tieWinner = g?.settings?.prize?.tieWinner;
+    if (tieWinner && winners.includes(tieWinner) && winners.length > 1) winners = [tieWinner];
+
+    const T = winners.length || 1;
+    const perWinner = round2(amount / T);
+
+    // Every player with negative prize in the save is a payer (deducted A$amount)
+    const rows = [];
+    plist.forEach(p=>{
+      const pname = p.name || "Player";
+      const contributed = round2(p.prize||0) < 0 ? round2(-(p.prize||0)) : 0;
+      if (contributed <= 0.0001) return;
+      winners.forEach(w=>{
+        if (w === pname) return;
+        rows.push({ from: pname, to: w, amount: perWinner });
+      });
+    });
+
+    return { rows, amount };
+  }
+
   // ---- Stats (scoped, fractional ties) ----
   const [winsMode, setWinsMode] = useState("fractional");
   const [winsScope, setWinsScope] = useState("all");
@@ -682,6 +716,33 @@ export default function App(){
 
             // Per-head payments section: only show if server stored g.perHead
             const perHead = g.perHead;
+
+            // NEW: compute prize-money rows (display only)
+            const prizeBlock = (() => {
+              const { rows, amount } = computePrizeRowsForGame(g);
+              if (!rows.length) return null;
+              return (
+                <>
+                  <div style={{height:8}} />
+                  <strong>Prize money</strong> <span className="meta">(A${amount} per player; shown separately)</span>
+                  <table className="table">
+                    <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
+                    <tbody>
+                      {rows.map((r,i)=>(
+                        <tr key={i}>
+                          <td>{r.from}</td>
+                          <td>{r.to}</td>
+                          <td className="center mono">
+                            {aud(r.amount)} <span className="meta">(Prize money)</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              );
+            })();
+
             const perHeadBlock = perHead ? (
               <div className="card" style={{marginTop:8}}>
                 <div className="card-head">
@@ -767,6 +828,9 @@ export default function App(){
                             ))}
                           </tbody>
                         </table>
+
+                        {/* NEW: prize money shown separately */}
+                        {prizeBlock}
 
                         {perHeadBlock}
                       </div>
