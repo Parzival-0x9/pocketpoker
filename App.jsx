@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, toCSV } from "./lib/calc.js";
@@ -73,7 +72,7 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
-  const [combinedView, setCombinedView] = useState({}); // NEW: toggle per game id
+  const [combinedView, setCombinedView] = useState({}); // toggle per game id
   useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
 
   // ----- Cloud API helpers -----
@@ -244,7 +243,7 @@ export default function App(){
     localStorage.setItem(FELT, felt);
   }, [felt]);
 
-  // Totals (uses equal-split per-loser for txns; ignores prize when splitting)
+  // Totals (uses equal-split per-loser for txns)
   const totals = useMemo(() => {
     const base = players.map(p => ({
       ...p,
@@ -256,7 +255,7 @@ export default function App(){
       net: round2(p.baseCash - p.buyIns * buyInAmount)
     }));
 
-    // Prize-from-pot adjusts display (netAdj/cashOutAdj); settlement ignores prize
+    // Prize-from-pot adjusts display (netAdj/cashOutAdj); settlement ignores prize for saving
     let adjusted = withNet.map(p => ({
       ...p,
       prize: 0,
@@ -328,14 +327,20 @@ export default function App(){
     const cashAdjSum = round2(sum(adjusted.map(p => p.cashOutAdj)));
     const diff = round2(cashAdjSum - buyInSum);
 
-    // Equal-split ignores prize; use original game-only net as basis
-    const basis = withNet.map(p => ({ name: p.name || "Player", net: p.net }));
-    const txns = settleEqualSplitCapped(basis);
+    // A) TRUE basis (for saving): game-only net
+    const basisTrue = withNet.map(p => ({ name: p.name || "Player", net: p.net }));
+    const txnsGame = settleEqualSplitCapped(basisTrue);
+
+    // B) DISPLAY-ONLY basis: "net of prize" (as if buy-ins reduced by prizeAmount)
+    const basisNetOfPrize = (prizeFromPot && players.length >= 1)
+      ? withNet.map(p => ({ name: p.name || "Player", net: round2(p.net + prizeAmount) }))
+      : basisTrue;
+    const txnsNetOfPrize = settleEqualSplitCapped(basisNetOfPrize);
 
     const sorted = [...adjusted].sort((a, b) => b.netAdj - a.netAdj);
     const top = sorted.length ? sorted[0] : null;
 
-    return { adjusted, buyInSum, cashAdjSum, diff, txns, top };
+    return { adjusted, buyInSum, cashAdjSum, diff, txnsGame, txnsNetOfPrize, top };
   }, [players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner]);
 
   function updatePlayer(u){
@@ -368,7 +373,7 @@ export default function App(){
         cashOut:p.cashOutAdj,prize:p.prize,net:p.netAdj
       })),
       totals:{buyIns:totals.buyInSum,cashOuts:totals.cashAdjSum,diff:totals.diff},
-      txns: totals.txns
+      txns: totals.txnsGame // SAVE TRUE settlement (not display net-of-prize)
     };
     try{
       setSyncStatus("syncing");
@@ -427,7 +432,7 @@ export default function App(){
     return Array.from(set).sort();
   }, [players, history]);
 
-  // ---- Ledgers (cumulative) ----
+  // ---- Ledgers (cumulative, true flows) ----
   const ledgers = useMemo(()=>{
     const L = new Map();
     const ensure = (n)=>{
@@ -670,6 +675,21 @@ export default function App(){
       <div className="toolbar" style={{justifyContent:'flex-end', marginTop:12}}>
         <button className="btn success" onClick={saveGameToHistory} disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}>End Game & Save</button>
       </div>
+
+      {/* Display-only settlement (net of prize) - helper table for live game (optional) */}
+      <div className="detail" style={{marginTop:16}}>
+        <strong>Transfers for settlement</strong> <span className="meta">(net of prize — display only)</span>
+        <table className="table">
+          <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
+          <tbody>
+            {totals.txnsNetOfPrize.length===0 ? (
+              <tr><td colSpan="3" className="center meta">No transfers needed.</td></tr>
+            ) : totals.txnsNetOfPrize.map((t,i)=>(
+              <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 
@@ -711,7 +731,19 @@ export default function App(){
             // Per-head payments section: only show if server stored g.perHead
             const perHead = g.perHead;
 
-            // NEW: compute prize-money rows (display only)
+            // DISPLAY-ONLY settlement for this saved game (net of prize)
+            const rowsSettleDisplay = (() => {
+              const mode = g?.settings?.prize?.mode;
+              const prizeAmt = (mode === 'pot_all') ? (g?.settings?.prize?.amount ?? DEFAULT_PRIZE) : 0;
+              const baseTrue = (g.players || []).map(p => ({
+                name: p.name || "Player",
+                net: round2((p.net || 0) - (p.prize || 0)) // game-only net
+              }));
+              const baseNetOfPrize = baseTrue.map(r => ({ ...r, net: round2(r.net + prizeAmt) }));
+              return settleEqualSplitCapped(baseNetOfPrize);
+            })();
+
+            // Prize rows (display only)
             const prizeBlock = (() => {
               const { rows, amount } = computePrizeRowsForGame(g);
               if (!rows.length) return null;
@@ -737,14 +769,13 @@ export default function App(){
               );
             })();
 
-            // NEW: combined (settlement + prize) rows — display only
+            // Combined (use display settlement + prize)
             const combinedBlock = (() => {
-              const prize = computePrizeRowsForGame(g);
-              const rowsPrize = prize.rows || [];
-              const rowsSettle = g.txns || [];
+              const { rows: rowsPrize } = computePrizeRowsForGame(g);
+              const rowsSettle = rowsSettleDisplay;
               if (rowsPrize.length === 0 && rowsSettle.length === 0) return null;
 
-              const map = new Map(); // key: "from→to" -> { from,to,settlement,prize,total }
+              const map = new Map(); // key: "from→to"
               const add = (r, kind) => {
                 const k = `${r.from}→${r.to}`;
                 const cur = map.get(k) || { from: r.from, to: r.to, settlement: 0, prize: 0 };
@@ -752,13 +783,12 @@ export default function App(){
                 cur[kind] = round2((cur[kind] || 0) + amt);
                 map.set(k, cur);
               };
-
               rowsSettle.forEach(r => add(r, "settlement"));
               rowsPrize.forEach(r => add(r, "prize"));
 
               const out = Array.from(map.values())
                 .map(x => ({ ...x, total: round2((x.settlement || 0) + (x.prize || 0)) }))
-                .sort((a,b) => (b.total - a.total) || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+                .sort((a,b)=> (b.total - a.total) || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 
               return (
                 <>
@@ -869,13 +899,13 @@ export default function App(){
                         </table>
 
                         <div style={{height:8}} />
-                        <strong>Transfers for settlement</strong> <span className="meta">(equal-split per loser)</span>
+                        <strong>Transfers for settlement</strong> <span className="meta">(net of prize — display only)</span>
                         <table className="table">
                           <thead><tr><th>From</th><th>To</th><th className="center">Amount</th></tr></thead>
                           <tbody>
-                            {(g.txns||[]).length===0 ? (
+                            {rowsSettleDisplay.length===0 ? (
                               <tr><td colSpan="3" className="center meta">No transfers needed.</td></tr>
-                            ) : (g.txns||[]).map((t,i)=>(
+                            ) : rowsSettleDisplay.map((t,i)=>(
                               <tr key={i}><td>{t.from}</td><td>{t.to}</td><td className="center mono">{aud(t.amount)}</td></tr>
                             ))}
                           </tbody>
@@ -1162,7 +1192,7 @@ export default function App(){
           <button className={"btn " + (tab==='profiles'?'primary':'secondary')} onClick={()=>setTab('profiles')}>Profiles</button>
         </div>
 
-        <div className="footer meta">Tip: settlement ignores prize; it splits only game results.</div>
+        <div className="footer meta">Tip: settlement shown here is net-of-prize for clarity; Combined = settlement + prize and matches final nets.</div>
       </div>
     </>
   );
