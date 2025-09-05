@@ -1,4 +1,4 @@
-* App.jsx — Combined transfers view (incl. prize) + tie-winner override + draft sync + save confirmation */
+
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, toCSV } from "./lib/calc.js";
