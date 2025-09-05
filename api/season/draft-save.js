@@ -1,7 +1,3 @@
-// api/season/draft-save.js
-// Stores and returns the live "draft" for a season so devices can sync on Refresh.
-// Draft includes: players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner.
-
 import fs from "fs/promises";
 import path from "path";
 
@@ -14,11 +10,9 @@ async function kvGet(key) {
   const r = await fetch(url, { headers: { Authorization: `Bearer ${KV_TOKEN}` }});
   if (!r.ok) throw new Error(`KV get failed ${r.status}: ${await r.text()}`);
   const data = await r.json();
-  // Upstash returns { result: "<string or null>" }
   return data?.result ?? null;
 }
 async function kvSet(key, value) {
-  // Upstash REST expects raw text body for value (not JSON object).
   const url = `${KV_URL.replace(/\/+$/,"")}/set/${encodeURIComponent(key)}`;
   const r = await fetch(url, {
     method: "POST",
@@ -40,7 +34,6 @@ async function readSeason(seasonId) {
     if (!raw) return null;
     try { return JSON.parse(raw); } catch { return null; }
   }
-  // Local dev file
   const dir = path.join(process.cwd(), ".data");
   await fs.mkdir(dir, { recursive: true }).catch(() => {});
   const file = path.join(dir, `season_${seasonId}.json`);
@@ -103,11 +96,9 @@ export default async function handler(req, res) {
     const { seasonId, draft } = req.body || {};
     if (!seasonId) return res.status(400).json({ error: "seasonId required" });
 
-    // Load or init season doc
     let season = await readSeason(seasonId);
     if (!season) season = emptySeason(seasonId);
 
-    // Sanitize incoming draft
     const cleanDraft = {
       players: cleanPlayers(draft?.players),
       buyInAmount: Number.isFinite(draft?.buyInAmount) ? draft.buyInAmount : 50,
@@ -116,13 +107,11 @@ export default async function handler(req, res) {
       prizeTieWinner: typeof draft?.prizeTieWinner === "string" ? draft.prizeTieWinner : "",
     };
 
-    // Save & bump version (so clients see a newer v on Refresh)
     season.draft = cleanDraft;
     season.version = Number.isFinite(season.version) ? season.version + 1 : 1;
 
     await writeSeason(seasonId, season);
 
-    // Helpful cache headers for clients
     res.setHeader("Cache-Control", "no-store, max-age=0");
     return res.status(200).json(season);
   } catch (e) {

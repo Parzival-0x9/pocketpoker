@@ -1,6 +1,3 @@
-/* App.jsx — Tie-Winner Override + Draft Sync (players, buy-ins, prize, override)
-   Assumes existing components/lib: PlayerRow, aud, sum, round2, toCSV.
-*/
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, toCSV } from "./lib/calc.js";
@@ -91,13 +88,14 @@ export default function App(){
         body: JSON.stringify({ seasonId: SEASON_ID, game })
       });
       if (res.status === 429) { alert("Too many saves, try again in a moment."); throw new Error("429"); }
+      if (res.status === 409) { throw new Error("409"); }
       if(!res.ok) throw new Error(await res.text());
       return await res.json();
     };
     try{
       return await tryPost(cloudVersion);
     }catch(e){
-      if (String(e).includes("409") || String(e.message||"").includes("409")) {
+      if (String(e.message||"") === "409") {
         const doc = await apiGetSeason();
         hydrateFromDoc(doc);
         return await tryPost(doc.version || 0);
@@ -113,13 +111,14 @@ export default function App(){
         body: JSON.stringify({ seasonId: SEASON_ID, gameId })
       });
       if (res.status === 429) { alert("Too many saves, try again in a moment."); throw new Error("429"); }
+      if (res.status === 409) { throw new Error("409"); }
       if(!res.ok) throw new Error(await res.text());
       return await res.json();
     };
     try{
       return await tryPost(cloudVersion);
     }catch(e){
-      if (String(e).includes("409") || String(e.message||"").includes("409")) {
+      if (String(e.message||"") === "409") {
         const doc = await apiGetSeason();
         hydrateFromDoc(doc);
         return await tryPost(doc.version || 0);
@@ -151,11 +150,14 @@ export default function App(){
   // --- DRAFT SAVE (sync live game state across devices) ---
   async function apiDraftSave(draft){
     try{
-      await fetch(`${API_BASE}/api/season/draft-save`, {
+      const res = await fetch(`${API_BASE}/api/season/draft-save`, {
         method: "POST",
         headers: { "Content-Type":"application/json" },
         body: JSON.stringify({ seasonId: SEASON_ID, draft })
       });
+      if (!res.ok) return; // best-effort
+      const doc = await res.json().catch(()=>null);
+      if (doc) hydrateFromDoc(doc); // bump version so next save won't 409
     }catch(e){
       console.warn("draft-save failed", e); // best-effort
     }
@@ -342,6 +344,16 @@ export default function App(){
   const resetGame=()=>{ setPlayers([blank(),blank()]); setOverrideMismatch(false); };
 
   async function saveGameToHistory(){
+    // Confirmation prompt
+    const ok = window.confirm(
+      `End game and save?\n\n`+
+      `Players: ${players.length}\n`+
+      `Buy-in: A$${buyInAmount}\n`+
+      `Prize from pot: ${prizeFromPot ? "ON" : "OFF"}${prizeFromPot ? ` (A$${prizeAmount})` : ""}\n\n`+
+      `You can undo by deleting from History later.`
+    );
+    if (!ok) return;
+
     const stamp = new Date().toISOString();
     const g={ id:uid(), stamp,
       settings:{
@@ -361,9 +373,10 @@ export default function App(){
       const doc = await apiAppendGame(g);
       hydrateFromDoc(doc);
       setSyncStatus("upToDate");
+      alert("Saved! Check the History tab.");
     }catch(e){
       console.error(e);
-      alert("Save failed. You can try Refresh, then Save again.");
+      alert("Save failed. Try Refresh, then save again.");
       setSyncStatus("error");
     }
   }
