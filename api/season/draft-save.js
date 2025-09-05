@@ -1,52 +1,132 @@
-// api/season/draft-save.js — store live 'Game' draft without bumping main version
-export const config = { runtime: "edge" };
+// api/season/draft-save.js
+// Stores and returns the live "draft" for a season so devices can sync on Refresh.
+// Draft includes: players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner.
 
-// Upstash REST helpers (same pattern as your other endpoints)
-const REST_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const REST_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-async function redis(command, ...args) {
-  if (!REST_URL || !REST_TOKEN) throw new Error("Missing Upstash REST env vars");
-  const url = REST_URL.replace(/\/$/, "") + "/" + [command, ...args.map(a => encodeURIComponent(String(a)))].join("/");
-  const res = await fetch(url, { method: "GET", headers: { Authorization: `Bearer ${REST_TOKEN}` } });
-  if (!res.ok) throw new Error(`Upstash error: ${res.status} ${await res.text()}`);
-  const data = await res.json(); return data.result;
+import fs from "fs/promises";
+import path from "path";
+
+// ---------- Storage helpers (KV in prod, JSON file in dev) ----------
+const KV_URL = process.env.KV_REST_API_URL || "";
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || "";
+
+async function kvGet(key) {
+  const url = `${KV_URL.replace(/\/+$/,"")}/get/${encodeURIComponent(key)}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${KV_TOKEN}` }});
+  if (!r.ok) throw new Error(`KV get failed ${r.status}: ${await r.text()}`);
+  const data = await r.json();
+  // Upstash returns { result: "<string or null>" }
+  return data?.result ?? null;
+}
+async function kvSet(key, value) {
+  // Upstash REST expects raw text body for value (not JSON object).
+  const url = `${KV_URL.replace(/\/+$/,"")}/set/${encodeURIComponent(key)}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${KV_TOKEN}`,
+      "Content-Type": "text/plain",
+    },
+    body: typeof value === "string" ? value : JSON.stringify(value),
+  });
+  if (!r.ok) throw new Error(`KV set failed ${r.status}: ${await r.text()}`);
+  return true;
 }
 
-export default async function handler(req) {
+const isProdKV = !!(KV_URL && KV_TOKEN);
+
+async function readSeason(seasonId) {
+  if (isProdKV) {
+    const raw = await kvGet(`season:${seasonId}`);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  // Local dev file
+  const dir = path.join(process.cwd(), ".data");
+  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+  const file = path.join(dir, `season_${seasonId}.json`);
   try {
-    if (req.method !== "POST") {
-      return new Response("Method Not Allowed", { status: 405 });
-    }
+    const buf = await fs.readFile(file, "utf8");
+    return JSON.parse(buf);
+  } catch {
+    return null;
+  }
+}
 
-    const { seasonId, draft } = await req.json();
-    if (!seasonId) return new Response("seasonId required", { status: 400 });
-    if (!draft || typeof draft.stamp !== "number") {
-      return new Response("draft.stamp (number) required", { status: 400 });
-    }
+async function writeSeason(seasonId, doc) {
+  if (isProdKV) {
+    await kvSet(`season:${seasonId}`, JSON.stringify(doc));
+    return;
+  }
+  const dir = path.join(process.cwd(), ".data");
+  await fs.mkdir(dir, { recursive: true }).catch(() => {});
+  const file = path.join(dir, `season_${seasonId}.json`);
+  await fs.writeFile(file, JSON.stringify(doc, null, 2), "utf8");
+}
 
-    const key = `season:${seasonId}`;
-    const val = await redis("GET", key);
-    let doc = val ? JSON.parse(val) : null;
-    if (!doc || typeof doc !== "object") {
-      doc = { seasonId, version: 0, updatedAt: new Date().toISOString(), games: [], lock: null, audit: [], profiles: {} };
-    }
+// ---------- Util ----------
+const round2 = (n) => Math.round((Number(n)||0) * 100) / 100;
 
-    const prevStamp = doc?.draft?.stamp || 0;
-    // Only store if newer than what we have
-    if (draft.stamp > prevStamp) {
-      doc.draft = {
-        stamp: draft.stamp,
-        players: Array.isArray(draft.players) ? draft.players : [],
-        buyInAmount: typeof draft.buyInAmount === "number" ? draft.buyInAmount : (doc?.draft?.buyInAmount ?? 50),
-        prizeFromPot: typeof draft.prizeFromPot === "boolean" ? draft.prizeFromPot : (doc?.draft?.prizeFromPot ?? true),
-        prizeAmount: typeof draft.prizeAmount === "number" ? draft.prizeAmount : (doc?.draft?.prizeAmount ?? 20)
-      };
-      // Do NOT bump doc.version (it's just a live draft)
-      await redis("SET", key, JSON.stringify(doc));
-    }
+function cleanPlayers(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(p => ({
+    id: String(p?.id || ""),
+    name: String(p?.name || ""),
+    buyIns: Math.max(0, Number.isFinite(p?.buyIns) ? p.buyIns : 0),
+    cashOut: round2(Number.isFinite(p?.cashOut) ? p.cashOut : 0),
+  }));
+}
 
-    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } });
+function emptySeason(seasonId) {
+  return {
+    id: seasonId,
+    version: 0,
+    games: [],
+    profiles: {},
+    draft: {
+      players: [],
+      buyInAmount: 50,
+      prizeFromPot: true,
+      prizeAmount: 20,
+      prizeTieWinner: "",
+    },
+  };
+}
+
+// ---------- Handler ----------
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({ error: "Method Not Allowed" });
+  }
+
+  try {
+    const { seasonId, draft } = req.body || {};
+    if (!seasonId) return res.status(400).json({ error: "seasonId required" });
+
+    // Load or init season doc
+    let season = await readSeason(seasonId);
+    if (!season) season = emptySeason(seasonId);
+
+    // Sanitize incoming draft
+    const cleanDraft = {
+      players: cleanPlayers(draft?.players),
+      buyInAmount: Number.isFinite(draft?.buyInAmount) ? draft.buyInAmount : 50,
+      prizeFromPot: !!draft?.prizeFromPot,
+      prizeAmount: Number.isFinite(draft?.prizeAmount) ? draft.prizeAmount : 20,
+      prizeTieWinner: typeof draft?.prizeTieWinner === "string" ? draft.prizeTieWinner : "",
+    };
+
+    // Save & bump version (so clients see a newer v on Refresh)
+    season.draft = cleanDraft;
+    season.version = Number.isFinite(season.version) ? season.version + 1 : 1;
+
+    await writeSeason(seasonId, season);
+
+    // Helpful cache headers for clients
+    res.setHeader("Cache-Control", "no-store, max-age=0");
+    return res.status(200).json(season);
   } catch (e) {
-    return new Response(JSON.stringify({ error: e.message || "server error" }), { status: 500, headers: { "content-type": "application/json" } });
+    console.error("draft-save error:", e);
+    return res.status(500).json({ error: "Internal error" });
   }
 }
