@@ -1,11 +1,4 @@
-/* App.jsx — End Game Save Fixes + Confirmation + Prize Money sub-table
-   Includes:
-   - Tie-winner override
-   - Cross-device draft sync (players, buy-in, prize, override)
-   - Proper 409 handling for append/delete
-   - Confirmation prompt before saving
-   - NEW: separate "Prize money" table in History Details
-*/
+* App.jsx — Combined transfers view (incl. prize) + tie-winner override + draft sync + save confirmation */
 import React, { useMemo, useState, useEffect } from "react";
 import PlayerRow from "./components/PlayerRow.jsx";
 import { aud, sum, round2, toCSV } from "./lib/calc.js";
@@ -20,7 +13,7 @@ const LS="pocketpoker_state", THEME="pp_theme", FELT="pp_felt", PROFILES="pp_pro
 const load=()=>{try{const r=localStorage.getItem(LS);return r?JSON.parse(r):null}catch{return null}};
 const save=(s)=>{try{localStorage.setItem(LS,JSON.stringify(s))}catch{}};
 
-// === Equal-split per loser (deterministic; caps at winners' needs; ignores prize) ===
+// === Equal-split per loser (deterministic; caps at winners’ needs; ignores prize) ===
 function settleEqualSplitCapped(rows){
   const winnersBase = rows.filter(r=> r.net > 0.0001).map(r=>({ name: (r.name||"Player"), need: round2(r.net) }));
   const losersBase  = rows.filter(r=> r.net < -0.0001).map(r=>({ name: (r.name||"Player"), loss: round2(-r.net) }));
@@ -80,6 +73,7 @@ export default function App(){
   const [ledgerExpanded,setLedgerExpanded]=useState({});
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState(()=> localStorage.getItem("pp_tab") || "game");
+  const [combinedView, setCombinedView] = useState({}); // NEW: toggle per game id
   useEffect(()=>{ localStorage.setItem("pp_tab", tab); }, [tab]);
 
   // ----- Cloud API helpers -----
@@ -743,6 +737,64 @@ export default function App(){
               );
             })();
 
+            // NEW: combined (settlement + prize) rows — display only
+            const combinedBlock = (() => {
+              const prize = computePrizeRowsForGame(g);
+              const rowsPrize = prize.rows || [];
+              const rowsSettle = g.txns || [];
+              if (rowsPrize.length === 0 && rowsSettle.length === 0) return null;
+
+              const map = new Map(); // key: "from→to" -> { from,to,settlement,prize,total }
+              const add = (r, kind) => {
+                const k = `${r.from}→${r.to}`;
+                const cur = map.get(k) || { from: r.from, to: r.to, settlement: 0, prize: 0 };
+                const amt = round2(r.amount);
+                cur[kind] = round2((cur[kind] || 0) + amt);
+                map.set(k, cur);
+              };
+
+              rowsSettle.forEach(r => add(r, "settlement"));
+              rowsPrize.forEach(r => add(r, "prize"));
+
+              const out = Array.from(map.values())
+                .map(x => ({ ...x, total: round2((x.settlement || 0) + (x.prize || 0)) }))
+                .sort((a,b) => (b.total - a.total) || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+
+              return (
+                <>
+                  <div style={{height:8}} />
+                  <strong>Combined transfers (incl. prize)</strong>
+                  <span className="meta"> — settlement + prize shown separately; Total is their sum</span>
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>From</th>
+                        <th>To</th>
+                        <th className="center">Settlement</th>
+                        <th className="center">Prize money</th>
+                        <th className="center">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {out.map((r,i)=>(
+                        <tr key={i}>
+                          <td>{r.from}</td>
+                          <td>{r.to}</td>
+                          <td className="center mono">
+                            {r.settlement ? aud(r.settlement) : <span className="meta">—</span>}
+                          </td>
+                          <td className="center mono">
+                            {r.prize ? <>{aud(r.prize)} <span className="meta">(Prize)</span></> : <span className="meta">—</span>}
+                          </td>
+                          <td className="center mono">{aud(r.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              );
+            })();
+
             const perHeadBlock = perHead ? (
               <div className="card" style={{marginTop:8}}>
                 <div className="card-head">
@@ -829,8 +881,19 @@ export default function App(){
                           </tbody>
                         </table>
 
-                        {/* NEW: prize money shown separately */}
+                        {/* Prize money (separate clarity) */}
                         {prizeBlock}
+
+                        {/* Toggle + Combined table */}
+                        <div className="toolbar" style={{justifyContent:'flex-end', marginTop:6}}>
+                          <button
+                            className="btn ghost"
+                            onClick={()=> setCombinedView(v => ({ ...v, [key]: !v[key] }))}
+                          >
+                            {combinedView[key] ? 'Hide Combined' : 'Show Combined (incl. prize)'}
+                          </button>
+                        </div>
+                        {combinedView[key] && combinedBlock}
 
                         {perHeadBlock}
                       </div>
