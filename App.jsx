@@ -881,36 +881,38 @@ export default function App() {
 
       <hr className="hair" />
 
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Player</th>
-            <th className="center">Buy-ins</th>
-            <th className="center">Cash-out</th>
-            <th className="center">Net</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {players.map((p) => (
-            <PlayerRow
-              key={p.id}
-              p={p}
-              onChange={updatePlayer}
-              buyInAmount={buyInAmount}
-            />
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <th>Total</th>
-            <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
-            <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
-            <th className="center mono">{totals.diff.toFixed(2)}</th>
-            <th className="center"></th>
-          </tr>
-        </tfoot>
-      </table>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th className="center">Buy-ins</th>
+              <th className="center">Cash-out</th>
+              <th className="center">Net</th>
+              <th className="center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {players.map((p) => (
+              <PlayerRow
+                key={p.id}
+                p={p}
+                onChange={updatePlayer}
+                buyInAmount={buyInAmount}
+              />
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
+              <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
+              <th className="center mono">{totals.diff.toFixed(2)}</th>
+              <th className="center"></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
 
       {Math.abs(totals.diff) > 0.01 ? (
         <div className="header" style={{ marginTop: 12 }}>
@@ -952,32 +954,34 @@ export default function App() {
       <div className="detail" style={{ marginTop: 16 }}>
         <strong>Transfers for settlement</strong>{" "}
         <span className="meta">(net of prize — display only)</span>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>From</th>
-              <th>To</th>
-              <th className="center">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {totals.txnsNetOfPrize.length === 0 ? (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
               <tr>
-                <td colSpan="3" className="center meta">
-                  No transfers needed.
-                </td>
+                <th>From</th>
+                <th>To</th>
+                <th className="center">Amount</th>
               </tr>
-            ) : (
-              totals.txnsNetOfPrize.map((t, i) => (
-                <tr key={i}>
-                  <td>{t.from}</td>
-                  <td>{t.to}</td>
-                  <td className="center mono">{aud(t.amount)}</td>
+            </thead>
+            <tbody>
+              {totals.txnsNetOfPrize.length === 0 ? (
+                <tr>
+                  <td colSpan="3" className="center meta">
+                    No transfers needed.
+                  </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : (
+                totals.txnsNetOfPrize.map((t, i) => (
+                  <tr key={i}>
+                    <td>{t.from}</td>
+                    <td>{t.to}</td>
+                    <td className="center mono">{aud(t.amount)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -996,535 +1000,368 @@ export default function App() {
         </div>
       </div>
       <div className="meta">This list reflects the season stored on the server.</div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Players (with net)</th>
-            <th className="center">Totals</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {history.length === 0 ? (
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
             <tr>
-              <td colSpan="4" className="center meta">
-                No games saved yet.
-              </td>
+              <th>When</th>
+              <th>Players (with net)</th>
+              <th className="center">Totals</th>
+              <th className="center">Actions</th>
             </tr>
-          ) : (
-            history.map((g) => {
-              const key = g.id;
-              const playersSorted = [...g.players].sort((a, b) => b.net - a.net);
-              const winner = playersSorted[0];
-              const summary = playersSorted.map((p) => (
-                <span key={p.name} style={{ marginRight: 8 }}>
-                  {p.name} ({p.net >= 0 ? "+" : ""}
-                  {p.net.toFixed(2)})
-                  {profiles[p.name]?.payid && (
-                    <span className="meta" style={{ marginLeft: 6 }}>
-                      • {profiles[p.name].payid}
-                    </span>
-                  )}
-                </span>
-              ));
+          </thead>
+          <tbody>
+            {history.length === 0 ? (
+              <tr>
+                <td colSpan="4" className="center meta">
+                  No games saved yet.
+                </td>
+              </tr>
+            ) : (
+              history.map((g) => {
+                const key = g.id;
+                const playersSorted = [...g.players].sort((a, b) => b.net - a.net);
+                const winner = playersSorted[0];
+                const summary = playersSorted.map((p) => (
+                  <span key={p.name} style={{ marginRight: 8 }}>
+                    {p.name} ({p.net >= 0 ? "+" : ""}
+                    {p.net.toFixed(2)})
+                    {profiles[p.name]?.payid && (
+                      <span className="meta" style={{ marginLeft: 6 }}>
+                        • {profiles[p.name].payid}
+                      </span>
+                    )}
+                  </span>
+                ));
 
-              const totalsCell = `${aud(g.totals.buyIns)} / ${aud(
-                g.totals.cashOuts
-              )} (${aud(g.totals.diff)})`;
+                const totalsCell = `${aud(g.totals.buyIns)} / ${aud(
+                  g.totals.cashOuts
+                )} (${aud(g.totals.diff)})`;
 
-              // Per-head payments section: only show if server stored g.perHead
-              const perHead = g.perHead;
+                // Per-head payments section: only show if server stored g.perHead
+                const perHead = g.perHead;
 
-              // DISPLAY-ONLY settlement for this saved game (net of prize)
-              const rowsSettleDisplay = (() => {
-                const mode = g?.settings?.prize?.mode;
-                const prizeAmt =
-                  mode === "pot_all" ? g?.settings?.prize?.amount ?? DEFAULT_PRIZE : 0;
-                const baseTrue = (g.players || []).map((p) => ({
-                  name: p.name || "Player",
-                  net: round2((p.net || 0) - (p.prize || 0)), // game-only net
-                }));
-                const baseNetOfPrize = baseTrue.map((r) => ({
-                  ...r,
-                  net: round2(r.net + prizeAmt),
-                }));
-                return settleEqualSplitCapped(baseNetOfPrize);
-              })();
+                // DISPLAY-ONLY settlement for this saved game (net of prize)
+                const rowsSettleDisplay = (() => {
+                  const mode = g?.settings?.prize?.mode;
+                  const prizeAmt =
+                    mode === "pot_all" ? g?.settings?.prize?.amount ?? DEFAULT_PRIZE : 0;
+                  const baseTrue = (g.players || []).map((p) => ({
+                    name: p.name || "Player",
+                    net: round2((p.net || 0) - (p.prize || 0)), // game-only net
+                  }));
+                  const baseNetOfPrize = baseTrue.map((r) => ({
+                    ...r,
+                    net: round2(r.net + prizeAmt),
+                  }));
+                  return settleEqualSplitCapped(baseNetOfPrize);
+                })();
 
-              // Prize rows (display only)
-              const prizeBlock = (() => {
-                const { rows, amount } = computePrizeRowsForGame(g);
-                if (!rows.length) return null;
-                return (
-                  <>
-                    <div style={{ height: 8 }} />
-                    <strong>Prize money</strong>{" "}
-                    <span className="meta">
-                      (A${amount} per player; shown separately)
-                    </span>
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>From</th>
-                          <th>To</th>
-                          <th className="center">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map((r, i) => (
-                          <tr key={i}>
-                            <td>{r.from}</td>
-                            <td>{r.to}</td>
-                            <td className="center mono">
-                              {aud(r.amount)} <span className="meta">(Prize money)</span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </>
-                );
-              })();
-
-              // Combined (settlement + prize, shown separately with a Total)
-              const combinedBlock = (() => {
-                const { rows: rowsPrize } = computePrizeRowsForGame(g);
-                const rowsSettle = rowsSettleDisplay;
-                if (rowsPrize.length === 0 && rowsSettle.length === 0) return null;
-
-                const map = new Map(); // key: "from→to"
-                const add = (r, kind) => {
-                  const k = `${r.from}→${r.to}`;
-                  const cur =
-                    map.get(k) || { from: r.from, to: r.to, settlement: 0, prize: 0 };
-                  const amt = round2(r.amount);
-                  cur[kind] = round2((cur[kind] || 0) + amt);
-                  map.set(k, cur);
-                };
-                rowsSettle.forEach((r) => add(r, "settlement"));
-                rowsPrize.forEach((r) => add(r, "prize"));
-
-                const out = Array.from(map.values())
-                  .map((x) => ({
-                    ...x,
-                    total: round2((x.settlement || 0) + (x.prize || 0)),
-                  }))
-                  .sort(
-                    (a, b) =>
-                      b.total - a.total ||
-                      a.from.localeCompare(b.from) ||
-                      a.to.localeCompare(b.to)
-                  );
-
-                return (
-                  <>
-                    <div style={{ height: 8 }} />
-                    <strong>Combined transfers (incl. prize)</strong>
-                    <span className="meta">
-                      {" "}
-                      — settlement + prize shown separately; Total is their sum
-                    </span>
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>From</th>
-                          <th>To</th>
-                          <th className="center">Settlement</th>
-                          <th className="center">Prize money</th>
-                          <th className="center">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {out.map((r, i) => (
-                          <tr key={i}>
-                            <td>{r.from}</td>
-                            <td>{r.to}</td>
-                            <td className="center mono">
-                              {r.settlement ? (
-                                aud(r.settlement)
-                              ) : (
-                                <span className="meta">—</span>
-                              )}
-                            </td>
-                            <td className="center mono">
-                              {r.prize ? (
-                                <>
-                                  {aud(r.prize)}{" "}
-                                  <span className="meta">(Prize)</span>
-                                </>
-                              ) : (
-                                <span className="meta">—</span>
-                              )}
-                            </td>
-                            <td className="center mono">{aud(r.total)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </>
-                );
-              })();
-
-              const perHeadBlock = perHead ? (
-                <div className="card" style={{ marginTop: 8 }}>
-                  <div className="card-head">
-                    <strong>Per-head payments</strong>
-                    <span className="meta">
-                      {" "}
-                      Winner: {perHead.winner} • A${perHead.amount} from{" "}
-                      {perHead.payers?.length || 0} players
-                    </span>
-                  </div>
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Payer</th>
-                        <th className="center">Paid?</th>
-                        <th className="center">Method</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(perHead.payers || []).map((payer) => {
-                        const rec =
-                          perHead.payments?.[payer] || {
-                            paid: false,
-                            method: null,
-                            paidAt: null,
-                          };
-                        return (
-                          <tr key={payer}>
-                            <td>{payer}</td>
-                            <td className="center">
-                              <input
-                                type="checkbox"
-                                checked={!!rec.paid}
-                                onChange={(e) =>
-                                  apiMarkPayment({
-                                    gameId: g.id,
-                                    payer,
-                                    paid: e.target.checked,
-                                    method: rec.method || "PayID",
-                                  })
-                                }
-                              />
-                            </td>
-                            <td className="center">
-                              <select
-                                value={rec.method || ""}
-                                onChange={(e) =>
-                                  apiMarkPayment({
-                                    gameId: g.id,
-                                    payer,
-                                    paid: true,
-                                    method: e.target.value,
-                                  })
-                                }
-                              >
-                                <option value="">—</option>
-                                <option value="PayID">PayID</option>
-                                <option value="Cash">Cash</option>
-                                <option value="Bank">Bank</option>
-                              </select>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : null;
-
-              return (
-                <React.Fragment key={g.id}>
-                  <tr>
-                    <td className="meta mono">
-                      {new Date(g.stamp).toLocaleString()}
-                    </td>
-                    <td>{summary}</td>
-                    <td className="center mono">{totalsCell}</td>
-                    <td className="center">
-                      <div className="toolbar" style={{ justifyContent: "center" }}>
-                        <button
-                          className="btn secondary"
-                          onClick={() =>
-                            setExpanded((e) => ({ ...e, [key]: !e[key] }))
-                          }
-                        >
-                          {expanded[key] ? "Hide" : "Details"}
-                        </button>
-                        <button className="btn danger" onClick={() => deleteGame(g.id)}>
-                          Delete
-                        </button>
+                // Prize rows (display only)
+                const prizeBlock = (() => {
+                  const { rows, amount } = computePrizeRowsForGame(g);
+                  if (!rows.length) return null;
+                  return (
+                    <>
+                      <div style={{ height: 8 }} />
+                      <strong>Prize money</strong>{" "}
+                      <span className="meta">
+                        (A${amount} per player; shown separately)
+                      </span>
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>From</th>
+                              <th>To</th>
+                              <th className="center">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map((r, i) => (
+                              <tr key={i}>
+                                <td>{r.from}</td>
+                                <td>{r.to}</td>
+                                <td className="center mono">
+                                  {aud(r.amount)} <span className="meta">(Prize money)</span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
-                    </td>
-                  </tr>
-                  {expanded[key] && (
+                    </>
+                  );
+                })();
+
+                // Combined (settlement + prize, shown separately with a Total)
+                const combinedBlock = (() => {
+                  const { rows: rowsPrize } = computePrizeRowsForGame(g);
+                  const rowsSettle = rowsSettleDisplay;
+                  if (rowsPrize.length === 0 && rowsSettle.length === 0) return null;
+
+                  const map = new Map(); // key: "from→to"
+                  const add = (r, kind) => {
+                    const k = `${r.from}→${r.to}`;
+                    const cur =
+                      map.get(k) || { from: r.from, to: r.to, settlement: 0, prize: 0 };
+                    const amt = round2(r.amount);
+                    cur[kind] = round2((cur[kind] || 0) + amt);
+                    map.set(k, cur);
+                  };
+                  rowsSettle.forEach((r) => add(r, "settlement"));
+                  rowsPrize.forEach((r) => add(r, "prize"));
+
+                  const out = Array.from(map.values())
+                    .map((x) => ({
+                      ...x,
+                      total: round2((x.settlement || 0) + (x.prize || 0)),
+                    }))
+                    .sort(
+                      (a, b) =>
+                        b.total - a.total ||
+                        a.from.localeCompare(b.from) ||
+                        a.to.localeCompare(b.to)
+                    );
+
+                  return (
+                    <>
+                      <div style={{ height: 8 }} />
+                      <strong>Combined transfers (incl. prize)</strong>
+                      <span className="meta">
+                        {" "}
+                        — settlement + prize shown separately; Total is their sum
+                      </span>
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>From</th>
+                              <th>To</th>
+                              <th className="center">Settlement</th>
+                              <th className="center">Prize money</th>
+                              <th className="center">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {out.map((r, i) => (
+                              <tr key={i}>
+                                <td>{r.from}</td>
+                                <td>{r.to}</td>
+                                <td className="center mono">
+                                  {r.settlement ? (
+                                    aud(r.settlement)
+                                  ) : (
+                                    <span className="meta">—</span>
+                                  )}
+                                </td>
+                                <td className="center mono">
+                                  {r.prize ? (
+                                    <>
+                                      {aud(r.prize)}{" "}
+                                      <span className="meta">(Prize)</span>
+                                    </>
+                                  ) : (
+                                    <span className="meta">—</span>
+                                  )}
+                                </td>
+                                <td className="center mono">{aud(r.total)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  );
+                })();
+
+                const perHeadBlock = perHead ? (
+                  <div className="card" style={{ marginTop: 8 }}>
+                    <div className="card-head">
+                      <strong>Per-head payments</strong>
+                      <span className="meta">
+                        {" "}
+                        Winner: {perHead.winner} • A${perHead.amount} from{" "}
+                        {perHead.payers?.length || 0} players
+                      </span>
+                    </div>
+                    <div className="table-wrap">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Payer</th>
+                            <th className="center">Paid?</th>
+                            <th className="center">Method</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(perHead.payers || []).map((payer) => {
+                            const rec =
+                              perHead.payments?.[payer] || {
+                                paid: false,
+                                method: null,
+                                paidAt: null,
+                              };
+                            return (
+                              <tr key={payer}>
+                                <td>{payer}</td>
+                                <td className="center">
+                                  <input
+                                    type="checkbox"
+                                    checked={!!rec.paid}
+                                    onChange={(e) =>
+                                      apiMarkPayment({
+                                        gameId: g.id,
+                                        payer,
+                                        paid: e.target.checked,
+                                        method: rec.method || "PayID",
+                                      })
+                                    }
+                                  />
+                                </td>
+                                <td className="center">
+                                  <select
+                                    value={rec.method || ""}
+                                    onChange={(e) =>
+                                      apiMarkPayment({
+                                        gameId: g.id,
+                                        payer,
+                                        paid: true,
+                                        method: e.target.value,
+                                      })
+                                    }
+                                  >
+                                    <option value="">—</option>
+                                    <option value="PayID">PayID</option>
+                                    <option value="Cash">Cash</option>
+                                    <option value="Bank">Bank</option>
+                                  </select>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null;
+
+                return (
+                  <React.Fragment key={g.id}>
                     <tr>
-                      <td colSpan="4">
-                        <div className="detail">
-                          <strong>Per-player results</strong>
-                          <table className="table">
-                            <thead>
-                              <tr>
-                                <th>Player</th>
-                                <th className="center">Buy-in</th>
-                                <th className="center">Cash-out (adj)</th>
-                                <th className="center">Prize adj</th>
-                                <th className="center">Net</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {playersSorted.map((p) => (
-                                <tr key={p.name}>
-                                  <td>
-                                    {p.name}
-                                    {p.name === winner?.name && <span className="chip" />}
-                                  </td>
-                                  <td className="center mono">{aud(p.buyInTotal)}</td>
-                                  <td className="center mono">{aud(p.cashOut)}</td>
-                                  <td className="center mono">{aud(p.prize)}</td>
-                                  <td className="center mono">
-                                    {p.net >= 0 ? "+" : ""}
-                                    {aud(p.net)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-
-                          <div style={{ height: 8 }} />
-                          <strong>Transfers for settlement</strong>{" "}
-                          <span className="meta">(net of prize — display only)</span>
-                          <table className="table">
-                            <thead>
-                              <tr>
-                                <th>From</th>
-                                <th>To</th>
-                                <th className="center">Amount</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {rowsSettleDisplay.length === 0 ? (
-                                <tr>
-                                  <td colSpan="3" className="center meta">
-                                    No transfers needed.
-                                  </td>
-                                </tr>
-                              ) : (
-                                rowsSettleDisplay.map((t, i) => (
-                                  <tr key={i}>
-                                    <td>{t.from}</td>
-                                    <td>{t.to}</td>
-                                    <td className="center mono">{aud(t.amount)}</td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-
-                          {/* Prize money (separate clarity) */}
-                          {prizeBlock}
-
-                          {/* Toggle + Combined table */}
-                          <div
-                            className="toolbar"
-                            style={{ justifyContent: "flex-end", marginTop: 6 }}
+                      <td className="meta mono">
+                        {new Date(g.stamp).toLocaleString()}
+                      </td>
+                      <td>{summary}</td>
+                      <td className="center mono">{totalsCell}</td>
+                      <td className="center">
+                        <div className="toolbar" style={{ justifyContent: "center" }}>
+                          <button
+                            className="btn secondary"
+                            onClick={() =>
+                              setExpanded((e) => ({ ...e, [key]: !e[key] }))
+                            }
                           >
-                            <button
-                              className="btn ghost"
-                              onClick={() =>
-                                setCombinedView((v) => ({ ...v, [key]: !v[key] }))
-                              }
-                            >
-                              {combinedView[key]
-                                ? "Hide Combined"
-                                : "Show Combined (incl. prize)"}
-                            </button>
-                          </div>
-                          {combinedView[key] && combinedBlock}
-
-                          {perHeadBlock}
+                            {expanded[key] ? "Hide" : "Details"}
+                          </button>
+                          <button className="btn danger" onClick={() => deleteGame(g.id)}>
+                            Delete
+                          </button>
                         </div>
                       </td>
                     </tr>
-                  )}
-                </React.Fragment>
-              );
-            })
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-
-  const LedgersSection = (
-    <div className="surface">
-      <h3 style={{ marginTop: 0 }}>Player Ledgers (Cumulative)</h3>
-      <div className="meta">Net = Transfers + Prize impact.</div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Player</th>
-            <th className="center">Net Balance</th>
-            <th className="center">Prize Impact</th>
-            <th className="center">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {Object.keys(ledgers).length === 0 ? (
-            <tr>
-              <td colSpan="4" className="center meta">
-                No history yet.
-              </td>
-            </tr>
-          ) : (
-            Object.entries(ledgers)
-              .sort((a, b) => b[1].net - a[1].net)
-              .map(([name, info]) => {
-                const key = name;
-                return (
-                  <React.Fragment key={name}>
-                    <tr>
-                      <td>{name}</td>
-                      <td className="center mono">
-                        {info.net >= 0 ? "+" : ""}
-                        {aud(info.net)}
-                      </td>
-                      <td className="center mono">
-                        {info.prize >= 0 ? "+" : ""}
-                        {aud(info.prize)}
-                      </td>
-                      <td className="center">
-                        <button
-                          className="btn secondary"
-                          onClick={() =>
-                            setLedgerExpanded((e) => ({ ...e, [key]: !e[key] }))
-                          }
-                        >
-                          {ledgerExpanded[key] ? "Hide" : "Show"}
-                        </button>
-                      </td>
-                    </tr>
-                    {ledgerExpanded[key] && (
+                    {expanded[key] && (
                       <tr>
                         <td colSpan="4">
                           <div className="detail">
-                            <div className="meta" style={{ marginBottom: 8 }}>
-                              Transfers net:{" "}
-                              {info.netTransfers >= 0 ? "+" : ""}
-                              {aud(info.netTransfers)} • Prize impact:{" "}
-                              {info.prize >= 0 ? "+" : ""}
-                              {aud(info.prize)} • Total:{" "}
-                              {info.net >= 0 ? "+" : ""}
-                              {aud(info.net)}
+                            <strong>Per-player results</strong>
+                            <div className="table-wrap">
+                              <table className="table">
+                                <thead>
+                                  <tr>
+                                    <th>Player</th>
+                                    <th className="center">Buy-in</th>
+                                    <th className="center">Cash-out (adj)</th>
+                                    <th className="center">Prize adj</th>
+                                    <th className="center">Net</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {playersSorted.map((p) => (
+                                    <tr key={p.name}>
+                                      <td>
+                                        {p.name}
+                                        {p.name === winner?.name && <span className="chip" />}
+                                      </td>
+                                      <td className="center mono">{aud(p.buyInTotal)}</td>
+                                      <td className="center mono">{aud(p.cashOut)}</td>
+                                      <td className="center mono">{aud(p.prize)}</td>
+                                      <td className="center mono">
+                                        {p.net >= 0 ? "+" : ""}
+                                        {aud(p.net)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
                             </div>
 
-                            <strong>Settlement transfers</strong>
-                            <table className="table">
-                              <thead>
-                                <tr>
-                                  <th>They owe</th>
-                                  <th className="center">Amount</th>
-                                  <th>Owed by</th>
-                                  <th className="center">Amount</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                <tr>
-                                  <td>
-                                    {(info.owes || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owes.map((x, i) => (
-                                        <div key={i}>{x.to}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                  <td className="center mono">
-                                    {(info.owes || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owes.map((x, i) => (
-                                        <div key={i}>{aud(x.amount)}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                  <td>
-                                    {(info.owedBy || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owedBy.map((x, i) => (
-                                        <div key={i}>{x.from}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                  <td className="center mono">
-                                    {(info.owedBy || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owedBy.map((x, i) => (
-                                        <div key={i}>{aud(x.amount)}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                </tr>
-                              </tbody>
-                            </table>
+                            <div style={{ height: 8 }} />
+                            <strong>Transfers for settlement</strong>{" "}
+                            <span className="meta">(net of prize — display only)</span>
+                            <div className="table-wrap">
+                              <table className="table">
+                                <thead>
+                                  <tr>
+                                    <th>From</th>
+                                    <th>To</th>
+                                    <th className="center">Amount</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rowsSettleDisplay.length === 0 ? (
+                                    <tr>
+                                      <td colSpan="3" className="center meta">
+                                        No transfers needed.
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    rowsSettleDisplay.map((t, i) => (
+                                      <tr key={i}>
+                                        <td>{t.from}</td>
+                                        <td>{t.to}</td>
+                                        <td className="center mono">{aud(t.amount)}</td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
 
-                            <div style={{ height: 10 }} />
+                            {/* Prize money (separate clarity) */}
+                            {prizeBlock}
 
-                            <strong>Prize money (A$20 per player by game)</strong>
-                            <table className="table">
-                              <thead>
-                                <tr>
-                                  <th>They owe (prize)</th>
-                                  <th className="center">Amount</th>
-                                  <th>Owed by (prize)</th>
-                                  <th className="center">Amount</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                <tr>
-                                  <td>
-                                    {(info.owesPrize || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owesPrize.map((x, i) => (
-                                        <div key={i}>{x.to}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                  <td className="center mono">
-                                    {(info.owesPrize || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owesPrize.map((x, i) => (
-                                        <div key={i}>{aud(x.amount)}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                  <td>
-                                    {(info.owedByPrize || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owedByPrize.map((x, i) => (
-                                        <div key={i}>{x.from}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                  <td className="center mono">
-                                    {(info.owedByPrize || []).length === 0 ? (
-                                      <span className="meta">—</span>
-                                    ) : (
-                                      info.owedByPrize.map((x, i) => (
-                                        <div key={i}>{aud(x.amount)}</div>
-                                      ))
-                                    )}
-                                  </td>
-                                </tr>
-                              </tbody>
-                            </table>
+                            {/* Toggle + Combined table */}
+                            <div
+                              className="toolbar"
+                              style={{ justifyContent: "flex-end", marginTop: 6 }}
+                            >
+                              <button
+                                className="btn ghost"
+                                onClick={() =>
+                                  setCombinedView((v) => ({ ...v, [key]: !v[key] }))
+                                }
+                              >
+                                {combinedView[key]
+                                  ? "Hide Combined"
+                                  : "Show Combined (incl. prize)"}
+                              </button>
+                            </div>
+                            {combinedView[key] && (
+                              <div className="table-wrap">{combinedBlock}</div>
+                            )}
+
+                            {perHeadBlock}
                           </div>
                         </td>
                       </tr>
@@ -1532,9 +1369,196 @@ export default function App() {
                   </React.Fragment>
                 );
               })
-          )}
-        </tbody>
-      </table>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const LedgersSection = (
+    <div className="surface">
+      <h3 style={{ marginTop: 0 }}>Player Ledgers (Cumulative)</h3>
+      <div className="meta">Net = Transfers + Prize impact.</div>
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th className="center">Net Balance</th>
+              <th className="center">Prize Impact</th>
+              <th className="center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.keys(ledgers).length === 0 ? (
+              <tr>
+                <td colSpan="4" className="center meta">
+                  No history yet.
+                </td>
+              </tr>
+            ) : (
+              Object.entries(ledgers)
+                .sort((a, b) => b[1].net - a[1].net)
+                .map(([name, info]) => {
+                  const key = name;
+                  return (
+                    <React.Fragment key={name}>
+                      <tr>
+                        <td>{name}</td>
+                        <td className="center mono">
+                          {info.net >= 0 ? "+" : ""}
+                          {aud(info.net)}
+                        </td>
+                        <td className="center mono">
+                          {info.prize >= 0 ? "+" : ""}
+                          {aud(info.prize)}
+                        </td>
+                        <td className="center">
+                          <button
+                            className="btn secondary"
+                            onClick={() =>
+                              setLedgerExpanded((e) => ({ ...e, [key]: !e[key] }))
+                            }
+                          >
+                            {ledgerExpanded[key] ? "Hide" : "Show"}
+                          </button>
+                        </td>
+                      </tr>
+                      {ledgerExpanded[key] && (
+                        <tr>
+                          <td colSpan="4">
+                            <div className="detail">
+                              <div className="meta" style={{ marginBottom: 8 }}>
+                                Transfers net:{" "}
+                                {info.netTransfers >= 0 ? "+" : ""}
+                                {aud(info.netTransfers)} • Prize impact:{" "}
+                                {info.prize >= 0 ? "+" : ""}
+                                {aud(info.prize)} • Total:{" "}
+                                {info.net >= 0 ? "+" : ""}
+                                {aud(info.net)}
+                              </div>
+
+                              <strong>Settlement transfers</strong>
+                              <div className="table-wrap">
+                                <table className="table">
+                                  <thead>
+                                    <tr>
+                                      <th>They owe</th>
+                                      <th className="center">Amount</th>
+                                      <th>Owed by</th>
+                                      <th className="center">Amount</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr>
+                                      <td>
+                                        {(info.owes || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owes.map((x, i) => (
+                                            <div key={i}>{x.to}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                      <td className="center mono">
+                                        {(info.owes || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owes.map((x, i) => (
+                                            <div key={i}>{aud(x.amount)}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                      <td>
+                                        {(info.owedBy || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owedBy.map((x, i) => (
+                                            <div key={i}>{x.from}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                      <td className="center mono">
+                                        {(info.owedBy || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owedBy.map((x, i) => (
+                                            <div key={i}>{aud(x.amount)}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              <div style={{ height: 10 }} />
+
+                              <strong>Prize money (A$20 per player by game)</strong>
+                              <div className="table-wrap">
+                                <table className="table">
+                                  <thead>
+                                    <tr>
+                                      <th>They owe (prize)</th>
+                                      <th className="center">Amount</th>
+                                      <th>Owed by (prize)</th>
+                                      <th className="center">Amount</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr>
+                                      <td>
+                                        {(info.owesPrize || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owesPrize.map((x, i) => (
+                                            <div key={i}>{x.to}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                      <td className="center mono">
+                                        {(info.owesPrize || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owesPrize.map((x, i) => (
+                                            <div key={i}>{aud(x.amount)}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                      <td>
+                                        {(info.owedByPrize || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owedByPrize.map((x, i) => (
+                                            <div key={i}>{x.from}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                      <td className="center mono">
+                                        {(info.owedByPrize || []).length === 0 ? (
+                                          <span className="meta">—</span>
+                                        ) : (
+                                          info.owedByPrize.map((x, i) => (
+                                            <div key={i}>{aud(x.amount)}</div>
+                                          ))
+                                        )}
+                                      </td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 
@@ -1547,75 +1571,77 @@ export default function App() {
         Set PayIDs (and optional avatars). This updates the whole season for
         everyone.
       </div>
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>PayID</th>
-            <th className="center">Avatar</th>
-            <th className="center">Save</th>
-          </tr>
-        </thead>
-        <tbody>
-          {knownNames.length === 0 ? (
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
             <tr>
-              <td colSpan="4" className="center meta">
-                No known names yet. Add players above first.
-              </td>
+              <th>Name</th>
+              <th>PayID</th>
+              <th className="center">Avatar</th>
+              <th className="center">Save</th>
             </tr>
-          ) : (
-            knownNames.map((n) => {
-              const payid = profileDrafts[n]?.payid ?? profiles[n]?.payid ?? "";
-              const handlePayid = (v) =>
-                setProfileDrafts((d) => ({ ...d, [n]: { ...(d[n] || {}), payid: v } }));
-              const handleAvatar = (file) => {
-                if (!file) {
-                  setProfileDrafts((d) => ({ ...d, [n]: { ...(d[n] || {}), avatar: null } }));
-                  return;
-                }
-                const reader = new FileReader();
-                reader.onload = () =>
-                  setProfileDrafts((d) => ({
-                    ...d,
-                    [n]: { ...(d[n] || {}), avatar: String(reader.result) },
-                  }));
-                reader.readAsDataURL(file);
-              };
-              const saveRow = () =>
-                apiProfileUpsert({
-                  name: n,
-                  payid,
-                  avatar: profileDrafts[n]?.avatar ?? null,
-                });
-              return (
-                <tr key={n}>
-                  <td>{n}</td>
-                  <td>
-                    <input
-                      type="text"
-                      value={payid}
-                      onChange={(e) => handlePayid(e.target.value)}
-                      placeholder="email/phone PayID"
-                    />
-                  </td>
-                  <td className="center">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleAvatar(e.target.files?.[0] || null)}
-                    />
-                  </td>
-                  <td className="center">
-                    <button className="btn secondary" onClick={saveRow}>
-                      Save
-                    </button>
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {knownNames.length === 0 ? (
+              <tr>
+                <td colSpan="4" className="center meta">
+                  No known names yet. Add players above first.
+                </td>
+              </tr>
+            ) : (
+              knownNames.map((n) => {
+                const payid = profileDrafts[n]?.payid ?? profiles[n]?.payid ?? "";
+                const handlePayid = (v) =>
+                  setProfileDrafts((d) => ({ ...d, [n]: { ...(d[n] || {}), payid: v } }));
+                const handleAvatar = (file) => {
+                  if (!file) {
+                    setProfileDrafts((d) => ({ ...d, [n]: { ...(d[n] || {}), avatar: null } }));
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () =>
+                    setProfileDrafts((d) => ({
+                      ...d,
+                      [n]: { ...(d[n] || {}), avatar: String(reader.result) },
+                    }));
+                  reader.readAsDataURL(file);
+                };
+                const saveRow = () =>
+                  apiProfileUpsert({
+                    name: n,
+                    payid,
+                    avatar: profileDrafts[n]?.avatar ?? null,
+                  });
+                return (
+                  <tr key={n}>
+                    <td>{n}</td>
+                    <td>
+                      <input
+                        type="text"
+                        value={payid}
+                        onChange={(e) => handlePayid(e.target.value)}
+                        placeholder="email/phone PayID"
+                      />
+                    </td>
+                    <td className="center">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleAvatar(e.target.files?.[0] || null)}
+                      />
+                    </td>
+                    <td className="center">
+                      <button className="btn secondary" onClick={saveRow}>
+                        Save
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 

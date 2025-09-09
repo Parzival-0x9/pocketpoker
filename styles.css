@@ -213,3 +213,16 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
     font-size: 14px;
   }
 }
+/* Horizontal scroll container for wide tables (works anywhere, not just .detail) */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.table-wrap > .table {
+  min-width: 560px;
+}
+@media (max-width: 420px) {
+  .table-wrap > .table { min-width: 520px; }
+}
+
