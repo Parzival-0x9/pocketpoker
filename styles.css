@@ -305,3 +305,20 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
   .game-compact input[type="number"], .game-compact input.small{ width:72px; padding:6px 6px; font-size:12px; }
   .game-compact .btn{ padding:6px 6px; font-size:12px; }
 }
+/* Game Lock banner */
+.lock-banner{
+  display:flex; align-items:center; gap:8px;
+  border:1px solid var(--border); border-radius:12px;
+  background:rgba(255,255,255,.04); color:var(--muted);
+  padding:8px 10px; margin-bottom:10px;
+}
+.lock-banner.ok{ border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.12); color:#a7f3d0; }
+.lock-banner.free{ border-color: rgba(234,179,8,.35); background: rgba(234,179,8,.12); color:#fde68a; }
+.lock-banner.hold{ border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.12); color:#fecaca; }
+.lock-banner .small{ padding:6px 8px; font-size:12px; }
+
+/* Fieldset wrapper to disable the Game controls cleanly */
+.fieldset-reset{ border:0; padding:0; margin:0; }
+.fieldset-reset[disabled] .btn{ opacity:.6; pointer-events:none; }
+.fieldset-reset[disabled] input,
+.fieldset-reset[disabled] select{ opacity:.8; cursor:not-allowed; }
