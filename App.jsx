@@ -1000,8 +1000,10 @@ export default function App() {
         </div>
       </div>
       <div className="meta">This list reflects the season stored on the server.</div>
-      <div className="table-wrap">
-        <table className="table">
+
+      {/* COMPACT history table: no horizontal scroll on phones */}
+      <div className="table-wrap table-wrap--compact">
+        <table className="table compact">
           <thead>
             <tr>
               <th>When</th>
@@ -1252,9 +1254,9 @@ export default function App() {
                       <td className="meta mono">
                         {new Date(g.stamp).toLocaleString()}
                       </td>
-                      <td>{summary}</td>
+                      <td className="players">{summary}</td>
                       <td className="center mono">{totalsCell}</td>
-                      <td className="center">
+                      <td className="center actions">
                         <div className="toolbar" style={{ justifyContent: "center" }}>
                           <button
                             className="btn secondary"

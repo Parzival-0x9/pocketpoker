@@ -213,6 +213,7 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
     font-size: 14px;
   }
 }
+
 /* Horizontal scroll container for wide tables (works anywhere, not just .detail) */
 .table-wrap {
   width: 100%;
@@ -226,3 +227,55 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
   .table-wrap > .table { min-width: 520px; }
 }
 
+/* ===== History Overview: compact (no horizontal scroll on phones) ===== */
+.table-wrap--compact { 
+  overflow-x: visible;              /* disable side-scroll for this table */
+}
+.table-wrap--compact > .table {
+  min-width: 100%;                  /* override global min-width */
+  table-layout: fixed;              /* stable column widths + wrapping */
+}
+
+.table.compact th,
+.table.compact td {
+  padding: 8px 8px;
+}
+
+/* Fix widths so players column can wrap freely */
+.table.compact th:nth-child(1) { width: 120px; } /* When */
+.table.compact th:nth-child(3) { width: 110px; } /* Totals */
+.table.compact th:nth-child(4) { width: 96px; }  /* Actions */
+
+/* Let the “Players (with net)” column wrap to multiple lines */
+.table.compact td.players {
+  white-space: normal;              /* override any nowrap */
+  word-break: break-word;
+}
+.table.compact td.players span {
+  display: inline-block;
+  margin-right: 6px;
+  margin-bottom: 4px;
+}
+
+/* Small phones: tighten spacing and stack action buttons if needed */
+@media (max-width: 420px) {
+  .table.compact th,
+  .table.compact td {
+    font-size: 12px;
+    line-height: 1.25;
+    padding: 6px 8px;
+  }
+  .table.compact th:nth-child(1) { width: 92px; }
+  .table.compact th:nth-child(3) { width: 96px; }
+  .table.compact th:nth-child(4) { width: 86px; }
+
+  .table.compact td.players span {
+    margin-right: 4px;
+    margin-bottom: 2px;
+  }
+
+  .table.compact td.actions .toolbar {
+    flex-direction: column;
+    gap: 6px;
+  }
+}
