@@ -881,8 +881,8 @@ export default function App() {
 
       <hr className="hair" />
 
-      <div className="table-wrap">
-        <table className="table">
+      <div className="table-wrap table-wrap--compact game-compact">
+        <table className="table compact">
           <thead>
             <tr>
               <th>Player</th>

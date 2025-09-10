@@ -279,3 +279,29 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
     gap: 6px;
   }
 }
+/* Game table: compact, no horizontal scroll */
+.game-compact.table-wrap { overflow-x: visible; }
+.game-compact > .table { min-width: 100%; table-layout: fixed; }
+
+/* Tighten cells, inputs, buttons */
+.game-compact .table th,
+.game-compact .table td { padding: 8px 8px; }
+
+@media (max-width: 860px){
+  .game-compact .table th:nth-child(2){ width:84px; }  /* Buy-ins */
+  .game-compact .table th:nth-child(3){ width:96px; }  /* Cash-out */
+  .game-compact .table th:nth-child(4){ width:74px; }  /* Net */
+  .game-compact .table th:nth-child(5){ width:96px; }  /* Actions */
+
+  .game-compact input.name{ width:100%; font-size:13px; padding:8px 10px; }
+  .game-compact input[type="number"], .game-compact input.small{
+    width:80px; text-align:center; padding:6px 8px; font-size:13px;
+  }
+  .game-compact .btn{ padding:6px 8px; font-size:12px; }
+}
+
+@media (max-width: 420px){
+  .game-compact .table th, .game-compact .table td{ padding:6px 6px; font-size:12px; line-height:1.25; }
+  .game-compact input[type="number"], .game-compact input.small{ width:72px; padding:6px 6px; font-size:12px; }
+  .game-compact .btn{ padding:6px 6px; font-size:12px; }
+}
