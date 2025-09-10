@@ -213,7 +213,7 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
     font-size: 14px;
   }
 }
-/* Horizontal scroll container for wide tables (works anywhere, not just .detail) */
+//* Horizontal scroll container for wide tables (works anywhere, not just .detail) */
 .table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -222,7 +222,23 @@ hr.hair{border:none;height:1px;background:linear-gradient(90deg,transparent,var(
 .table-wrap > .table {
   min-width: 560px;
 }
+
+/* Tighter tables + sticky first column on small phones */
 @media (max-width: 420px) {
   .table-wrap > .table { min-width: 520px; }
-}
 
+  .table th,
+  .table td {
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .table th:first-child,
+  .table td:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--surface, #0d0f14);
+    z-index: 1;
+  }
+}
