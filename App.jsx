@@ -29,33 +29,6 @@ const save = (s) => {
   } catch {}
 };
 
-// --- Device identity for soft lock ---
-const DID_KEY = "pp_device_id";
-const DNAME_KEY = "pp_device_name";
-const mkId = () =>
-  (typeof crypto !== "undefined" && crypto.randomUUID
-    ? crypto.randomUUID()
-    : Math.random().toString(36).slice(2));
-function getDeviceId() {
-  let id = localStorage.getItem(DID_KEY);
-  if (!id) {
-    id = mkId();
-    localStorage.setItem(DID_KEY, id);
-  }
-  return id;
-}
-function getDeviceName() {
-  let nm = localStorage.getItem(DNAME_KEY);
-  if (!nm) {
-    nm =
-      (navigator?.userAgentData?.platform ||
-        navigator?.platform ||
-        "device") + "";
-    localStorage.setItem(DNAME_KEY, nm);
-  }
-  return nm;
-}
-
 // === Equal-split per loser (deterministic; caps at winners’ needs; ignores prize) ===
 function settleEqualSplitCapped(rows) {
   const winnersBase = rows
@@ -155,17 +128,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("pp_tab", tab);
   }, [tab]);
-
-  // --- Device identity + Game Lock state ---
-  const myId = useMemo(() => getDeviceId(), []);
-  const myName = useMemo(() => getDeviceName(), []);
-  const [lock, setLock] = useState(null); // { holderId, holderName, since, expiresAt }
-  const hasLock =
-    !!lock &&
-    lock.holderId === myId &&
-    Date.now() < new Date(lock.expiresAt || 0).getTime();
-  const lockExpired =
-    !!lock && Date.now() >= new Date(lock.expiresAt || 0).getTime();
 
   // --- Draft-sync guards ---
   const lastDraftHash = useRef("");
@@ -283,11 +245,6 @@ export default function App() {
     // hydrate live draft
     if (doc?.draft && typeof doc.draft === "object") {
       const d = doc.draft;
-
-      // lock (soft lock stored inside draft)
-      if (d.lock && typeof d.lock === "object") setLock(d.lock);
-      else setLock(null);
-
       if (Array.isArray(d.players)) setPlayers(normalizePlayers(d.players));
       if (typeof d.buyInAmount === "number") setBuyInAmount(d.buyInAmount);
       if (typeof d.prizeFromPot === "boolean") setPrizeFromPot(d.prizeFromPot);
@@ -301,7 +258,6 @@ export default function App() {
           prizeFromPot: d.prizeFromPot,
           prizeAmount: d.prizeAmount,
           prizeTieWinner: d.prizeTieWinner || "",
-          lock: d.lock || null,
         });
         lastDraftHash.current = h;
         ignoreNextDraftAfterHydrate.current = true;
@@ -367,7 +323,6 @@ export default function App() {
         prizeFromPot,
         prizeAmount,
         prizeTieWinner,
-        lock: lock || null,
       };
       let hash = "";
       try {
@@ -384,7 +339,7 @@ export default function App() {
       }
     }, 500);
     return () => clearTimeout(t);
-  }, [players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner, lock]);
+  }, [players, buyInAmount, prizeFromPot, prizeAmount, prizeTieWinner]);
 
   useEffect(() => {
     document.documentElement.setAttribute(
@@ -400,78 +355,6 @@ export default function App() {
     );
     localStorage.setItem(FELT, felt);
   }, [felt]);
-
-  // ---- Lock helpers ----
-  function currentDraft() {
-    return {
-      players: normalizePlayers(players),
-      buyInAmount,
-      prizeFromPot,
-      prizeAmount,
-      prizeTieWinner,
-      lock: lock || null,
-    };
-  }
-
-  async function acquireLock(ttlMs = 45000) {
-    // Only grab if free or expired, or if it's already ours.
-    if (lock && !lockExpired && lock.holderId !== myId) return false;
-    const now = Date.now();
-    const newLock = {
-      holderId: myId,
-      holderName: myName,
-      since:
-        lock?.holderId === myId ? lock?.since : new Date(now).toISOString(),
-      expiresAt: new Date(now + ttlMs).toISOString(),
-    };
-    setLock(newLock);
-    await apiDraftSave({ ...currentDraft(), lock: newLock });
-    return true;
-  }
-
-  async function releaseLock() {
-    if (!hasLock) return;
-    setLock(null);
-    await apiDraftSave({ ...currentDraft(), lock: null });
-  }
-
-  // Auto-acquire when you switch to Game if it's free or expired
-  useEffect(() => {
-    if (tab !== "game") return;
-    if (!lock || lockExpired || lock.holderId === myId) {
-      acquireLock();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, lockExpired]);
-
-  // Heartbeat extend while holding
-  useEffect(() => {
-    if (!hasLock) return;
-    const iv = setInterval(() => {
-      const extend = {
-        holderId: myId,
-        holderName: myName,
-        since: lock?.since || new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 45000).toISOString(),
-      };
-      setLock(extend);
-      apiDraftSave({ ...currentDraft(), lock: extend });
-    }, 10000);
-    return () => clearInterval(iv);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasLock, lock?.since]);
-
-  // Best-effort release on hide/close
-  useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState === "hidden" && hasLock) {
-        releaseLock();
-      }
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasLock]);
 
   // Totals (uses equal-split per-loser for txns)
   const totals = useMemo(() => {
@@ -910,241 +793,196 @@ export default function App() {
   // --- UI sections ---
   const GameSection = (
     <div className="surface" style={{ marginTop: 16 }}>
-      <div
-        className={
-          "lock-banner " +
-          (hasLock ? "ok" : (lockExpired || !lock) ? "free" : "hold")
-        }
-      >
-        {hasLock ? (
-          <>
-            <strong>You have control</strong> • editing enabled
-            <button
-              className="btn ghost small"
-              onClick={releaseLock}
-              style={{ marginLeft: 8 }}
-            >
-              Release
-            </button>
-          </>
-        ) : !lock || lockExpired ? (
-          <>
-            <strong>No active editor</strong>
-            <button
-              className="btn secondary small"
-              onClick={() => acquireLock()}
-              style={{ marginLeft: 8 }}
-            >
-              Take control
-            </button>
-          </>
-        ) : (
-          <>
-            <strong>View-only</strong> — {lock.holderName || "another device"} is editing
-            <button
-              className="btn ghost small"
-              onClick={() => acquireLock()}
-              style={{ marginLeft: 8 }}
-            >
-              Request / Take if free
-            </button>
-          </>
-        )}
-      </div>
-
-      {/* Everything below respects the lock */}
-      <fieldset className="fieldset-reset" disabled={!hasLock}>
-        <div className="controls">
-          <div className="stack">
-            <button className="btn primary" onClick={startGame} disabled={!hasLock}>
-              Start New
-            </button>
-            <button className="btn secondary" onClick={addPlayer} disabled={!hasLock}>
-              Add Player
-            </button>
-            <button className="btn danger" onClick={resetGame} disabled={!hasLock}>
-              Reset Players
-            </button>
-            <span className="pill">🎯 Enter cash-outs at the end.</span>
-          </div>
-          <div className="toggles toolbar">
-            <label className="inline">
-              Buy-in (A$)
-              <input
-                className="small mono"
-                type="number"
-                min="1"
-                step="1"
-                value={buyInAmount}
-                onChange={(e) =>
-                  setBuyInAmount(Math.max(1, parseFloat(e.target.value || 50)))
-                }
-              />
-            </label>
-            <label className="inline">
-              <input
-                type="checkbox"
-                checked={prizeFromPot}
-                onChange={(e) => setPrizeFromPot(e.target.checked)}
-              />{" "}
-              Prize from pot: A$
-            </label>
+      <div className="controls">
+        <div className="stack">
+          <button className="btn primary" onClick={startGame}>
+            Start New
+          </button>
+          <button className="btn secondary" onClick={addPlayer}>
+            Add Player
+          </button>
+          <button className="btn danger" onClick={resetGame}>
+            Reset Players
+          </button>
+          <span className="pill">🎯 Enter cash-outs at the end.</span>
+        </div>
+        <div className="toggles toolbar">
+          <label className="inline">
+            Buy-in (A$)
             <input
               className="small mono"
               type="number"
-              min="0"
+              min="1"
               step="1"
-              value={prizeAmount}
+              value={buyInAmount}
               onChange={(e) =>
-                setPrizeAmount(Math.max(0, parseFloat(e.target.value || 0)))
+                setBuyInAmount(Math.max(1, parseFloat(e.target.value || 50)))
               }
             />
-            {prizeFromPot &&
-              (() => {
-                // detect ties among winners on game-only net
-                const baseTmp = players.map((p) => ({
-                  ...p,
-                  buyInTotal: round2(p.buyIns * buyInAmount),
-                  baseCash: p.cashOut,
-                }));
-                const withNetTmp = baseTmp.map((p) => ({
-                  ...p,
-                  net: round2(p.baseCash - p.buyIns * buyInAmount),
-                }));
-                if (withNetTmp.length < 2) return null;
-                const topNetTmp = Math.max(...withNetTmp.map((p) => p.net));
-                const winnersTmp = withNetTmp
-                  .filter((p) => Math.abs(p.net - topNetTmp) < 0.0001)
-                  .map((p) => p.name || "Player");
-                if (winnersTmp.length <= 1) return null;
-                return (
-                  <label className="inline">
-                    Tie winner override
-                    <select
-                      value={prizeTieWinner}
-                      onChange={(e) => setPrizeTieWinner(e.target.value)}
-                    >
-                      <option value="">Split equally</option>
-                      {winnersTmp.map((n) => (
-                        <option key={n} value={n}>
-                          {n} (single)
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                );
-              })()}
-            <span className="meta">
-              deduct from all players; split pool among top winners
-            </span>
+          </label>
+          <label className="inline">
+            <input
+              type="checkbox"
+              checked={prizeFromPot}
+              onChange={(e) => setPrizeFromPot(e.target.checked)}
+            />{" "}
+            Prize from pot: A$
+          </label>
+          <input
+            className="small mono"
+            type="number"
+            min="0"
+            step="1"
+            value={prizeAmount}
+            onChange={(e) =>
+              setPrizeAmount(Math.max(0, parseFloat(e.target.value || 0)))
+            }
+          />
+          {prizeFromPot &&
+            (() => {
+              // detect ties among winners on game-only net
+              const baseTmp = players.map((p) => ({
+                ...p,
+                buyInTotal: round2(p.buyIns * buyInAmount),
+                baseCash: p.cashOut,
+              }));
+              const withNetTmp = baseTmp.map((p) => ({
+                ...p,
+                net: round2(p.baseCash - p.buyIns * buyInAmount),
+              }));
+              if (withNetTmp.length < 2) return null;
+              const topNetTmp = Math.max(...withNetTmp.map((p) => p.net));
+              const winnersTmp = withNetTmp
+                .filter((p) => Math.abs(p.net - topNetTmp) < 0.0001)
+                .map((p) => p.name || "Player");
+              if (winnersTmp.length <= 1) return null;
+              return (
+                <label className="inline">
+                  Tie winner override
+                  <select
+                    value={prizeTieWinner}
+                    onChange={(e) => setPrizeTieWinner(e.target.value)}
+                  >
+                    <option value="">Split equally</option>
+                    {winnersTmp.map((n) => (
+                      <option key={n} value={n}>
+                        {n} (single)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })()}
+          <span className="meta">
+            deduct from all players; split pool among top winners
+          </span>
+        </div>
+      </div>
+
+      <hr className="hair" />
+
+      <div className="table-wrap table-wrap--compact game-compact">
+        <table className="table compact">
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th className="center">Buy-ins</th>
+              <th className="center">Cash-out</th>
+              <th className="center">Net</th>
+              <th className="center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {players.map((p) => (
+              <PlayerRow
+                key={p.id}
+                p={p}
+                onChange={updatePlayer}
+                buyInAmount={buyInAmount}
+              />
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th>Total</th>
+              <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
+              <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
+              <th className="center mono">{totals.diff.toFixed(2)}</th>
+              <th className="center"></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {Math.abs(totals.diff) > 0.01 ? (
+        <div className="header" style={{ marginTop: 12 }}>
+          <div className="ribbon">
+            ⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.
+          </div>
+          <div className="toolbar">
+            <button className="btn secondary" onClick={autoBalance}>
+              Auto-Balance
+            </button>
+            <label className="inline">
+              <input
+                type="checkbox"
+                checked={overrideMismatch}
+                onChange={(e) => setOverrideMismatch(e.target.checked)}
+              />{" "}
+              Override & Save
+            </label>
           </div>
         </div>
+      ) : (
+        <div className="header" style={{ marginTop: 12 }}>
+          <div className="ribbon">✅ Balanced: totals match.</div>
+          <div className="toolbar"></div>
+        </div>
+      )}
 
-        <hr className="hair" />
+      <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 12 }}>
+        <button
+          className="btn success"
+          onClick={saveGameToHistory}
+          disabled={Math.abs(totals.diff) > 0.01 && !overrideMismatch}
+        >
+          End Game & Save
+        </button>
+      </div>
 
-        <div className="table-wrap table-wrap--compact game-compact">
-          <table className="table compact">
+      {/* Display-only settlement (net of prize) */}
+      <div className="detail" style={{ marginTop: 16 }}>
+        <strong>Transfers for settlement</strong>{" "}
+        <span className="meta">(net of prize — display only)</span>
+        <div className="table-wrap">
+          <table className="table">
             <thead>
               <tr>
-                <th>Player</th>
-                <th className="center">Buy-ins</th>
-                <th className="center">Cash-out</th>
-                <th className="center">Net</th>
-                <th className="center">Actions</th>
+                <th>From</th>
+                <th>To</th>
+                <th className="center">Amount</th>
               </tr>
             </thead>
             <tbody>
-              {players.map((p) => (
-                <PlayerRow
-                  key={p.id}
-                  p={p}
-                  onChange={hasLock ? updatePlayer : () => {}}
-                  buyInAmount={buyInAmount}
-                />
-              ))}
+              {totals.txnsNetOfPrize.length === 0 ? (
+                <tr>
+                  <td colSpan="3" className="center meta">
+                    No transfers needed.
+                  </td>
+                </tr>
+              ) : (
+                totals.txnsNetOfPrize.map((t, i) => (
+                  <tr key={i}>
+                    <td>{t.from}</td>
+                    <td>{t.to}</td>
+                    <td className="center mono">{aud(t.amount)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
-            <tfoot>
-              <tr>
-                <th>Total</th>
-                <th className="center mono">A${totals.buyInSum.toFixed(2)}</th>
-                <th className="center mono">A${totals.cashAdjSum.toFixed(2)}</th>
-                <th className="center mono">{totals.diff.toFixed(2)}</th>
-                <th className="center"></th>
-              </tr>
-            </tfoot>
           </table>
         </div>
-
-        {Math.abs(totals.diff) > 0.01 ? (
-          <div className="header" style={{ marginTop: 12 }}>
-            <div className="ribbon">
-              ⚠️ Off by {aud(totals.diff)}. Use Auto-Balance or tick Override.
-            </div>
-            <div className="toolbar">
-              <button className="btn secondary" onClick={autoBalance}>
-                Auto-Balance
-              </button>
-              <label className="inline">
-                <input
-                  type="checkbox"
-                  checked={overrideMismatch}
-                  onChange={(e) => setOverrideMismatch(e.target.checked)}
-                />{" "}
-                Override & Save
-              </label>
-            </div>
-          </div>
-        ) : (
-          <div className="header" style={{ marginTop: 12 }}>
-            <div className="ribbon">✅ Balanced: totals match.</div>
-            <div className="toolbar"></div>
-          </div>
-        )}
-
-        <div className="toolbar" style={{ justifyContent: "flex-end", marginTop: 12 }}>
-          <button
-            className="btn success"
-            onClick={saveGameToHistory}
-            disabled={!hasLock || (Math.abs(totals.diff) > 0.01 && !overrideMismatch)}
-          >
-            End Game & Save
-          </button>
-        </div>
-
-        {/* Display-only settlement (net of prize) */}
-        <div className="detail" style={{ marginTop: 16 }}>
-          <strong>Transfers for settlement</strong>{" "}
-          <span className="meta">(net of prize — display only)</span>
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>From</th>
-                  <th>To</th>
-                  <th className="center">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {totals.txnsNetOfPrize.length === 0 ? (
-                  <tr>
-                    <td colSpan="3" className="center meta">
-                      No transfers needed.
-                    </td>
-                  </tr>
-                ) : (
-                  totals.txnsNetOfPrize.map((t, i) => (
-                    <tr key={i}>
-                      <td>{t.from}</td>
-                      <td>{t.to}</td>
-                      <td className="center mono">{aud(t.amount)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </fieldset>
+      </div>
     </div>
   );
 
