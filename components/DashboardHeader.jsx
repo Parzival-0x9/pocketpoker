@@ -8,6 +8,7 @@ export function SessionHeader({
   title = "CLASSMATES",
   slogan = "From classmates to cashmates ♠",
   user = "",
+  onLogout,
 }) {
   return (
     <header className="px-1 text-left">
@@ -41,7 +42,16 @@ export function SessionHeader({
           </svg>
         </div>
         <div className="min-w-0 space-y-1">
-          <h1 className="truncate text-3xl font-bold leading-none tracking-[0.18em] text-amber-400">{title}</h1>
+          <div className="flex items-start justify-between gap-3">
+            <h1 className="truncate text-3xl font-bold leading-none tracking-[0.18em] text-amber-400">{title}</h1>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="shrink-0 flex items-center gap-1 text-sm font-medium text-red-300 transition-all duration-150 hover:scale-[1.02] hover:text-red-200 active:scale-[0.98]"
+            >
+              ⎋ Logout
+            </button>
+          </div>
           <p className="truncate text-sm italic font-medium leading-snug text-emerald-300/80">{slogan}</p>
           <p className="truncate text-xs text-white/50">{user}</p>
         </div>
@@ -92,6 +102,7 @@ export function SyncStatusInline({
   role = "Admin",
   syncNote = "",
   onSyncNow,
+  onLogout,
   syncBusy = false,
   syncDisabled = false,
 }) {
@@ -113,6 +124,15 @@ export function SyncStatusInline({
         {syncNote ? <p className="truncate text-emerald-200/65">{syncNote}</p> : null}
       </div>
       <div className="flex items-center gap-2">
+        {onLogout ? (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="rounded-full px-3 py-1 font-medium text-red-100 ring-1 ring-red-300/25 transition active:scale-95"
+          >
+            Logout
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onSyncNow}
@@ -265,7 +285,7 @@ export function BottomStickyAction({ onSave, disabled = false }) {
           "w-full rounded-xl px-4 py-3 text-base font-bold transition duration-150 ease-out active:scale-[0.99]",
           disabled
             ? "cursor-not-allowed bg-amber-200/30 text-amber-100/70"
-            : "bg-gradient-to-b from-amber-300 to-amber-500 text-neutral-900 cta-ready-glow"
+            : "bg-gradient-to-b from-amber-400/80 to-amber-600/80 text-amber-950 cta-ready-glow"
         )}
       >
         End & Save Session

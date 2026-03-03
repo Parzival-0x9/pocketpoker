@@ -4,7 +4,7 @@ import {
   hasDatabase,
   pushDatabaseState,
   subscribeDatabaseState,
-} from "./supabase";
+} from "./dbSync";
 import {
   BalanceStatus,
   BottomStickyAction,
@@ -17,10 +17,12 @@ import {
   StatsHero,
   SyncStatusInline,
 } from "./components/DashboardHeader";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import LoginPage from "./pages/login";
+import SignupPage from "./pages/signup";
+import AuthSettingsPage from "./pages/settings";
 
 const DB_KEY = "classmates_db_v1";
-const SESSION_KEY = "classmates_device_user_v1";
-const DEVICE_KEY = "classmates_device_id_v1";
 const ONLINE_WINDOW_MS = 120000;
 const SYNC_STALE_MS = 45000;
 
@@ -301,14 +303,16 @@ function normalizeUsers(users) {
   const out = [];
 
   users.forEach((u) => {
+    const id = String(u?.id || uid());
+    if (!id || seen.has(id)) return;
+    seen.add(id);
     const rawUsername =
       safeName(u?.username || u?.name || String(u?.email || "").split("@")[0] || "").replace(/\s+/g, "_");
     const username = rawUsername.toLowerCase();
     const password = String(u?.password || u?.pass || "");
-    if (!username || seen.has(username)) return;
-    seen.add(username);
+    if (!username) return;
     out.push({
-      id: u?.id || uid(),
+      id,
       username,
       password,
       createdAt: u?.createdAt || new Date().toISOString(),
@@ -574,6 +578,24 @@ function aggregateOutstanding(history, mode) {
   return rows.sort((a, b) => b.sessionStamp.localeCompare(a.sessionStamp));
 }
 
+function aggregatePrizePaymentRows(history) {
+  const rows = [];
+  (Array.isArray(history) ? history : []).forEach((h) => {
+    getPrizePaymentsForSession(h).forEach((p) => {
+      rows.push({
+        sessionId: h.id,
+        sessionStamp: h.stamp,
+        from: p.from,
+        to: p.to,
+        amount: p.amount,
+        paymentId: p.id,
+        paid: !!p.paid,
+      });
+    });
+  });
+  return rows.sort((a, b) => b.sessionStamp.localeCompare(a.sessionStamp));
+}
+
 function groupOutstandingByPlayer(rows) {
   const byPlayer = new Map();
 
@@ -778,6 +800,7 @@ class ErrorBoundary extends React.Component {
 }
 
 function MainApp() {
+  const { user, profile, profiles, refreshProfiles, signOut, loading: authLoading } = useAuth();
   const [db, setDB] = useState(() => loadDB());
   const [syncState, setSyncState] = useState(() => (hasDatabase() ? "connecting" : "local-only"));
   const [syncError, setSyncError] = useState("");
@@ -786,11 +809,9 @@ function MainApp() {
   const [manualSyncBusy, setManualSyncBusy] = useState(false);
   const [syncNote, setSyncNote] = useState("");
   const [syncBootstrapped, setSyncBootstrapped] = useState(() => !hasDatabase());
-  const [currentUserId, setCurrentUserId] = useState(
-    () => localStorage.getItem(SESSION_KEY) || ""
-  );
   const [showRlsHelp, setShowRlsHelp] = useState(false);
   const [tab, setTab] = useState("home");
+  const [authView, setAuthView] = useState("login");
   const [playerDebtOpen, setPlayerDebtOpen] = useState({});
   const [historyOpen, setHistoryOpen] = useState({});
   const [statsCompact, setStatsCompact] = useState(false);
@@ -828,6 +849,11 @@ function MainApp() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    refreshProfiles().catch(() => {});
+  }, [refreshProfiles, user?.id]);
 
   function pushToast(message) {
     const id = `toast-${Date.now()}-${toastSeqRef.current++}`;
@@ -909,15 +935,14 @@ function MainApp() {
         if (cancelled || isRefreshing) return;
         isRefreshing = true;
         try {
+          if (pendingCloudWriteRef.current) {
+            setSyncState("connecting");
+            return;
+          }
           const remote = await fetchDatabaseState();
           if (cancelled) return;
           if (remote && typeof remote === "object") {
-            const local = dbRef.current;
-            if (compareStateFreshness(local, remote) > 0) {
-              await pushDatabaseState(local);
-            } else {
-              applyIncoming(remote);
-            }
+            applyIncoming(remote);
           }
           setSyncState("connected");
           setSyncError("");
@@ -966,14 +991,10 @@ function MainApp() {
 
       const pollId = window.setInterval(async () => {
         try {
+          if (pendingCloudWriteRef.current) return;
           const remote = await fetchDatabaseState();
           if (cancelled || !remote || typeof remote !== "object") return;
-          const local = dbRef.current;
-          if (compareStateFreshness(local, remote) > 0) {
-            await pushDatabaseState(local);
-          } else {
-            applyIncoming(remote);
-          }
+          applyIncoming(remote);
           setSyncState("connected");
           setSyncError("");
           setPendingCloudWrite(false);
@@ -1096,46 +1117,16 @@ function MainApp() {
   }
 
   const currentUser = useMemo(() => {
-    const user = (db.users || []).find((u) => u.id === currentUserId);
-    if (!user) return null;
+    if (!user?.id) return null;
+    const fallbackName = safeName(profile?.nickname || user.email?.split("@")[0] || "player");
     return {
       id: user.id,
-      username: user.username,
-      name: user.username,
-      lastLoginAt: user.lastLoginAt || null,
+      username: fallbackName.toLowerCase().replace(/\s+/g, "_"),
+      name: fallbackName,
+      lastLoginAt: new Date().toISOString(),
+      email: user.email || "",
     };
-  }, [db.users, currentUserId]);
-
-  useEffect(() => {
-    if (hasDatabase() && !syncBootstrapped) return;
-    if (currentUser) return;
-    const users = Array.isArray(db.users) ? db.users : [];
-    let deviceId = localStorage.getItem(DEVICE_KEY) || "";
-    if (!deviceId) {
-      deviceId = uid();
-      localStorage.setItem(DEVICE_KEY, deviceId);
-    }
-    const now = new Date().toISOString();
-
-    const existingForDevice = users.find((u) => u.id === deviceId);
-    if (existingForDevice) {
-      localStorage.setItem(SESSION_KEY, existingForDevice.id);
-      setCurrentUserId(existingForDevice.id);
-      return;
-    }
-
-    const guest = {
-      id: deviceId,
-      username: `player_${uid().slice(0, 4)}`,
-      password: "",
-      createdAt: now,
-      lastLoginAt: now,
-    };
-    const nextUsers = normalizeUsers([...(users || []), guest]);
-    commit({ ...db, users: nextUsers });
-    localStorage.setItem(SESSION_KEY, guest.id);
-    setCurrentUserId(guest.id);
-  }, [currentUser, db.users, syncBootstrapped]);
+  }, [profile?.nickname, user?.email, user?.id]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -1197,13 +1188,35 @@ function MainApp() {
     () => aggregateOutstanding(db.history, "noPrize"),
     [db.history]
   );
+  const prizePaymentRows = useMemo(
+    () => aggregatePrizePaymentRows(db.history),
+    [db.history]
+  );
+  const unpaidPrizeRows = useMemo(
+    () => prizePaymentRows.filter((r) => !r.paid),
+    [prizePaymentRows]
+  );
+  const prizeDebtByPlayer = useMemo(
+    () => groupOutstandingByPlayer(unpaidPrizeRows),
+    [unpaidPrizeRows]
+  );
   const playerDebtTrackers = useMemo(
     () => buildPlayerDebtTrackers(db.history),
     [db.history]
   );
   const presenceRows = useMemo(() => {
     const now = Date.now();
-    const users = Array.isArray(db.users) ? db.users : [];
+    const users = Array.isArray(profiles) && profiles.length
+      ? profiles.map((p) => ({
+          id: p.id,
+          username: safeName(p.nickname || p.email?.split("@")[0] || "player").toLowerCase(),
+          email: p.email || "",
+          createdAt: null,
+          lastLoginAt: null,
+        }))
+      : Array.isArray(db.users)
+        ? db.users
+        : [];
     const presence = db.presence || {};
     return users
       .map((u) => {
@@ -1213,6 +1226,7 @@ function MainApp() {
           userId: u.id || "",
           username: safeName(u.username || p.username || p.name || "player").toLowerCase(),
           name: safeName(u.username || p.username || p.name || "Player"),
+          email: String(u.email || ""),
           lastSeenAt: p.lastSeenAt || null,
           lastLoginAt: u.lastLoginAt || p.lastLoginAt || u.createdAt || null,
           online: seenTs > 0 && now - seenTs <= ONLINE_WINDOW_MS,
@@ -1222,7 +1236,7 @@ function MainApp() {
         if (a.online !== b.online) return a.online ? -1 : 1;
         return a.username.localeCompare(b.username);
       });
-  }, [db.presence, db.users]);
+  }, [db.presence, db.users, profiles]);
 
   function setCashBuyIn(v) {
     updateLive((live) => ({
@@ -1580,7 +1594,7 @@ function MainApp() {
   ];
   const visiblePresenceRows = presenceRows.slice(0, 7);
 
-  if (!currentUser) {
+  if (authLoading) {
     return (
       <div className="app auth-bg">
         <div className="auth-shell">
@@ -1592,11 +1606,22 @@ function MainApp() {
     );
   }
 
+  if (!currentUser) {
+    return authView === "signup" ? (
+      <SignupPage onSwitchToLogin={() => setAuthView("login")} />
+    ) : (
+      <LoginPage onSwitchToSignup={() => setAuthView("signup")} />
+    );
+  }
+
   return (
     <div className="app">
       <main className="content">
         <section className="space-y-4">
-          <SessionHeader user={currentUser.name} />
+          <SessionHeader
+            user={profile?.nickname || currentUser.name}
+            onLogout={signOut}
+          />
         </section>
 
         <div
@@ -1666,6 +1691,7 @@ function MainApp() {
                   >
                     <div>
                       <div className="font-semibold text-emerald-50">{p.name}</div>
+                      <div className="text-xs text-emerald-200/65">{p.email || "-"}</div>
                       <div className="text-xs text-emerald-200/65">
                         Last login: {p.lastLoginAt ? new Date(p.lastLoginAt).toLocaleString() : "-"}
                       </div>
@@ -1686,80 +1712,87 @@ function MainApp() {
         )}
 
         {tab === "settings" && (
-          <>
-            <section className="panel settings-grid">
-              <label>
-                1 Buy-in (Cash)
-                <input
-                  type="number"
-                  min="1"
-                  value={db.live.buyInCashAmount}
-                  onChange={(e) => setCashBuyIn(e.target.value)}
-                />
-              </label>
-              <label>
-                1 Buy-in (Chip Stack)
-                <input
-                  type="number"
-                  min="1"
-                  value={db.live.buyInChipStack}
-                  onChange={(e) => setChipStack(e.target.value)}
-                />
-              </label>
-              <label>
-                Prize per player (AUD)
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={db.live.prizePerPlayer}
-                  onChange={(e) => setPrizePerPlayer(e.target.value)}
-                />
-              </label>
-              <label className="prize-toggle">
-                <span>Prize mechanic enabled</span>
-                <input
-                  type="checkbox"
-                  checked={!!db.live.prizeEnabled}
-                  onChange={(e) => setPrizeEnabled(e.target.checked)}
-                />
-              </label>
-              <div className="chip-map">
-                <div className="muted">Current mapping</div>
-                <strong>
+          <section className="mx-auto max-w-2xl space-y-6">
+            <AuthSettingsPage />
+
+            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
+              <h3 className="text-lg font-semibold text-emerald-50">Session Mapping</h3>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-xs uppercase tracking-wide text-emerald-300/60">1 Buy-in (Cash)</span>
+                  <input
+                    className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
+                    type="number"
+                    min="1"
+                    value={db.live.buyInCashAmount}
+                    onChange={(e) => setCashBuyIn(e.target.value)}
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-xs uppercase tracking-wide text-emerald-300/60">1 Buy-in (Chip Stack)</span>
+                  <input
+                    className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
+                    type="number"
+                    min="1"
+                    value={db.live.buyInChipStack}
+                    onChange={(e) => setChipStack(e.target.value)}
+                  />
+                </label>
+                <label className="space-y-2">
+                  <span className="text-xs uppercase tracking-wide text-emerald-300/60">Prize per player (AUD)</span>
+                  <input
+                    className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={db.live.prizePerPlayer}
+                    onChange={(e) => setPrizePerPlayer(e.target.value)}
+                  />
+                </label>
+                <label className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                  <span className="text-xs uppercase tracking-wide text-emerald-300/60">Prize mechanic enabled</span>
+                  <input
+                    type="checkbox"
+                    checked={!!db.live.prizeEnabled}
+                    onChange={(e) => setPrizeEnabled(e.target.checked)}
+                  />
+                </label>
+              </div>
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-xs uppercase tracking-wide text-emerald-300/60">Current mapping</div>
+                <strong className="text-emerald-50">
                   {money(computed.cashPerBuyIn)} = {computed.chipsPerBuyIn.toLocaleString()} chips
                 </strong>
-                <div className="muted small">1 AUD = {computed.chipsPerDollar.toFixed(2)} chips</div>
+                <div className="text-xs text-emerald-200/50">1 AUD = {computed.chipsPerDollar.toFixed(2)} chips</div>
               </div>
             </section>
 
-            <section className="panel admin-settings-panel">
-              <div className="session-summary-head">
-                <h3>Database</h3>
-                <span className="muted small">
-                  {hasDatabase() ? "Supabase configured" : "Local mode"}
-                </span>
+            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-lg font-semibold text-emerald-50">Database Status</h3>
+                <span className="text-xs text-emerald-200/60">{hasDatabase() ? "Supabase configured" : "Local mode"}</span>
               </div>
-              <div className="muted small">
-                Status:{" "}
-                <span className={syncState === "error" ? "neg" : "pos"}>
+              <div className="mt-3 flex items-center gap-2 text-sm">
+                <span
+                  className={`h-2.5 w-2.5 rounded-full ${syncState === "connected" ? "bg-emerald-400" : syncState === "error" ? "bg-red-400" : "bg-emerald-200/60"}`}
+                />
+                <span className={syncState === "error" ? "text-red-300" : "text-emerald-200"}>
                   {syncState === "local-only"
                     ? "Local only (set VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY)"
                     : syncState}
                 </span>
               </div>
-              {syncError ? (
-                <div className="muted small neg" style={{ marginTop: 6 }}>
-                  {syncError}
-                </div>
-              ) : null}
+              {syncError ? <div className="mt-2 text-xs text-red-300">{syncError}</div> : null}
               {syncState === "error" && String(syncError || "").toLowerCase().includes("row-level security") ? (
-                <div style={{ marginTop: 8 }}>
-                  <button className="btn" onClick={() => setShowRlsHelp((v) => !v)}>
+                <div className="mt-3 space-y-2">
+                  <button
+                    className="rounded-xl border border-white/10 bg-emerald-800/60 px-3 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                    onClick={() => setShowRlsHelp((v) => !v)}
+                  >
                     {showRlsHelp ? "Hide DB Fix SQL" : "Show DB Fix SQL"}
                   </button>
                   {showRlsHelp ? (
-                    <pre className="muted small" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                    <pre className="whitespace-pre-wrap rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-emerald-200/70">
 {`alter table public.classmates_state enable row level security;
 
 drop policy if exists "Allow read for anon" on public.classmates_state;
@@ -1779,38 +1812,49 @@ for update to anon using (true) with check (true);`}
               ) : null}
             </section>
 
-            <section className="panel admin-settings-panel">
-              <div className="session-summary-head">
-                <h3>Admin Settings</h3>
-                <span className="muted small">Applies to all users</span>
+            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
+              <div className="space-y-1">
+                <h3 className="text-lg font-semibold text-emerald-50">Admin Actions</h3>
+                <div className="text-xs text-emerald-200/50">Applies to all users</div>
               </div>
-              <div className="admin-settings-row">
-                <div>
-                  <strong>Clear All Session Data</strong>
-                  <div className="muted small">
-                    Removes all saved session history and resets live session to empty defaults.
-                  </div>
-                  <div className="muted small">
-                    Last clear: {lastClear ? `${new Date(lastClear.at).toLocaleString()} by ${lastClear.by}` : "never"}
-                  </div>
+              <div className="mt-4 space-y-3">
+                <div className="text-xs text-emerald-200/50">
+                  Removes all saved session history and resets live session to empty defaults.
                 </div>
-                <button className="btn btn-danger" onClick={clearAllSessionData}>
+                <div className="text-xs text-emerald-200/50">
+                  Last clear: {lastClear ? `${new Date(lastClear.at).toLocaleString()} by ${lastClear.by}` : "never"}
+                </div>
+                <button
+                  className="w-full rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-300 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={clearAllSessionData}
+                >
                   Clear Data
                 </button>
               </div>
             </section>
 
-            <section className="panel admin-settings-panel">
-              <div className="session-summary-head">
-                <h3>Backup</h3>
-                <span className="muted small">Export or restore app data</span>
+            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
+              <div className="space-y-1">
+                <h3 className="text-lg font-semibold text-emerald-50">Backup</h3>
+                <div className="text-xs text-emerald-200/50">Export or restore app data</div>
               </div>
-              <div className="actions-row">
-                <button className="btn btn-primary" onClick={downloadSessionReportCsv}>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <button
+                  className="rounded-xl bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-4 py-2.5 text-sm font-bold text-amber-950 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={downloadSessionReportCsv}
+                >
                   Download Session Report (.csv)
                 </button>
-                <button className="btn" onClick={downloadBackup}>Download Raw Backup (.csv)</button>
-                <button className="btn" onClick={() => backupInputRef.current?.click()}>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={downloadBackup}
+                >
+                  Download Raw Backup (.csv)
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={() => backupInputRef.current?.click()}
+                >
                   Restore CSV Backup
                 </button>
                 <input
@@ -1821,31 +1865,27 @@ for update to anon using (true) with check (true);`}
                   onChange={(e) => restoreBackupFile(e.target.files?.[0] || null)}
                 />
               </div>
-              <div className="muted small">
-                Restore replaces current data. Keep a fresh CSV backup before restoring another file.
-              </div>
-              <div className="muted small" style={{ marginTop: 4 }}>
-                Session Report CSV is for reading in Sheets/Excel. Raw Backup CSV is for app restore.
-              </div>
-              <div className="muted small" style={{ marginTop: 8 }}>
-                Auto backup is saved after every "End & Save Session" (keeps latest 20).
+              <div className="mt-4 space-y-1 text-xs text-emerald-200/50">
+                <div>Restore replaces current data. Keep a fresh CSV backup before restoring another file.</div>
+                <div>Session Report CSV is for Sheets/Excel. Raw Backup CSV is for app restore.</div>
+                <div>Auto backup is saved after every "End & Save Session" (keeps latest 20).</div>
               </div>
               {(db.autoBackups || []).length > 0 ? (
-                <div style={{ marginTop: 8 }}>
+                <div className="mt-4 space-y-3">
                   {(db.autoBackups || []).slice(0, 5).map((b) => (
-                    <div key={b.id} className="home-row">
-                      <span>
+                    <div key={b.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                      <div className="text-xs text-emerald-200/60">
                         {new Date(b.at).toLocaleString()} by {b.by}
-                      </span>
-                      <div className="actions-row">
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                         <button
-                          className="btn btn-primary"
+                          className="rounded-xl bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-3 py-2 text-sm font-bold text-amber-950 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
                           onClick={() => downloadSessionReportFromBackupCsv(b.csv, "classmates-auto-session-report")}
                         >
                           Session Report CSV
                         </button>
                         <button
-                          className="btn"
+                          className="rounded-xl border border-white/10 bg-emerald-800/60 px-3 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
                           onClick={() => downloadBackupCsv(b.csv, "classmates-auto-backup")}
                         >
                           Raw Backup CSV
@@ -1855,18 +1895,15 @@ for update to anon using (true) with check (true);`}
                   ))}
                 </div>
               ) : (
-                <div className="muted small" style={{ marginTop: 8 }}>
-                  No auto backups yet.
-                </div>
+                <div className="mt-4 text-xs text-emerald-200/50">No auto backups yet.</div>
               )}
               {(db.autoBackups || []).length > 5 ? (
-                <div className="muted small" style={{ marginTop: 4 }}>
+                <div className="mt-2 text-xs text-emerald-200/50">
                   Showing latest 5 of {(db.autoBackups || []).length} auto backups.
                 </div>
               ) : null}
             </section>
-
-          </>
+          </section>
         )}
 
         {tab === "live" && (
@@ -1992,7 +2029,10 @@ for update to anon using (true) with check (true);`}
                           <div className="muted small">{p.netChips.toLocaleString()} chips</div>
                         </td>
                         <td>
-                          <button className="btn btn-danger" onClick={() => removePlayer(p.id)}>
+                          <button
+                            className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                            onClick={() => removePlayer(p.id)}
+                          >
                             Remove
                           </button>
                         </td>
@@ -2045,7 +2085,10 @@ for update to anon using (true) with check (true);`}
                         onFocus={() => setActiveEditPlayerId(p.id)}
                       />
                     </div>
-                    <button className="btn btn-danger" onClick={() => removePlayer(p.id)}>
+                    <button
+                      className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-300 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                      onClick={() => removePlayer(p.id)}
+                    >
                       Remove
                     </button>
                   </div>
@@ -2164,6 +2207,65 @@ for update to anon using (true) with check (true);`}
                 </div>
               </div>
             )}
+            <div className="player-tracker-wrap">
+              <div className="history-group-title">Prize Money Debts</div>
+              <div className="muted small" style={{ marginBottom: 8 }}>
+                Prize deductions owed to winner(s). Mark each transfer as paid or unpaid.
+              </div>
+              {prizePaymentRows.length === 0 ? (
+                <div className="muted">No prize money debts found.</div>
+              ) : (
+                <>
+                  {prizeDebtByPlayer.length > 0 ? (
+                    <div className="player-tracker-list" style={{ marginBottom: 10 }}>
+                      {prizeDebtByPlayer.map((p) => (
+                        <div key={`prize-net-${p.name}`} className="debt-summary-row">
+                          <strong>{p.name}</strong>
+                          <span className={round2(p.totalOwedBy - p.totalOwes) >= 0 ? "pos" : "neg"}>
+                            {round2(p.totalOwedBy - p.totalOwes) >= 0 ? "+" : ""}
+                            {money(round2(p.totalOwedBy - p.totalOwes))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="history-table-wrap">
+                    <table className="history-subtable history-prize-transfer-table">
+                      <thead>
+                        <tr>
+                          <th>Session</th>
+                          <th>From</th>
+                          <th>To</th>
+                          <th>Amount</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prizePaymentRows.map((r) => (
+                          <tr key={`${r.sessionId}-${r.paymentId}`}>
+                            <td>{new Date(r.sessionStamp).toLocaleString()}</td>
+                            <td>{r.from}</td>
+                            <td>{r.to}</td>
+                            <td>{money(r.amount)}</td>
+                            <td>
+                              <select
+                                value={r.paid ? "paid" : "unpaid"}
+                                onChange={(e) =>
+                                  setPrizePaymentStatus(r.sessionId, r.paymentId, e.target.value === "paid")
+                                }
+                              >
+                                <option value="unpaid">Unpaid</option>
+                                <option value="paid">Paid</option>
+                              </select>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
           </section>
         )}
 
@@ -2378,8 +2480,10 @@ for update to anon using (true) with check (true);`}
 
 export default function App() {
   return (
-    <ErrorBoundary>
-      <MainApp />
-    </ErrorBoundary>
+    <AuthProvider>
+      <ErrorBoundary>
+        <MainApp />
+      </ErrorBoundary>
+    </AuthProvider>
   );
 }

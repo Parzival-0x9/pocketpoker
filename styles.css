@@ -353,6 +353,7 @@ pre { overflow-x: auto; max-width: 100%; }
 }
 
 .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions-col { display: grid; gap: 8px; margin-bottom: 8px; }
 .admin-settings-panel { border-color: rgba(220, 38, 38, 0.3); }
 .admin-settings-row {
   border: 1px solid rgba(220, 38, 38, 0.25);
@@ -524,6 +525,14 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px 6px;
+}
+
+/* Softer negative tone for Debts + History to match Live/Settings destructive palette */
+.history-list .neg,
+.player-tracker-wrap .neg,
+.debt-summary-row .neg,
+.history-subtable .neg {
+  color: rgba(252, 165, 165, 0.92);
 }
 
 .summary-table td:nth-child(n+2),

@@ -49,3 +49,36 @@ for update
 to authenticated
 using (true)
 with check (true);
+
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text,
+  nickname text,
+  role text default 'user',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.profiles enable row level security;
+
+drop policy if exists "Profiles read authenticated" on public.profiles;
+create policy "Profiles read authenticated"
+on public.profiles
+for select
+to authenticated
+using (true);
+
+drop policy if exists "Profiles insert own" on public.profiles;
+create policy "Profiles insert own"
+on public.profiles
+for insert
+to authenticated
+with check (auth.uid() = id);
+
+drop policy if exists "Profiles update own" on public.profiles;
+create policy "Profiles update own"
+on public.profiles
+for update
+to authenticated
+using (auth.uid() = id)
+with check (auth.uid() = id);
