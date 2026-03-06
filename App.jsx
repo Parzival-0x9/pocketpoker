@@ -11,7 +11,6 @@ import {
   HighlightCard,
   PrimaryNavTabs,
   PrizeSummary,
-  QuickActionsTop,
   SessionHeader,
   SimpleListCard,
   StatsHero,
@@ -40,7 +39,71 @@ const money = (n) =>
   }).format(Number(n) || 0);
 
 function blankPlayer() {
-  return { id: uid(), name: "", buyIns: 0, cashOut: 0 };
+  const rowId = uid();
+  return {
+    id: rowId,
+    playerId: `unlinked:${rowId}`,
+    linkedProfileId: null,
+    name: "",
+    buyIns: 0,
+    cashOut: 0,
+  };
+}
+
+function normalizeLivePlayer(p) {
+  const rowId = String(p?.id || uid());
+  const linkedProfileId = p?.linkedProfileId ? String(p.linkedProfileId) : null;
+  const playerId = String(p?.playerId || linkedProfileId || rowId);
+  return {
+    id: rowId,
+    playerId,
+    linkedProfileId: linkedProfileId || (playerId.includes("unlinked:") ? null : playerId),
+    name: safeName(p?.name || ""),
+    buyIns: Math.max(0, parseInt(p?.buyIns || 0, 10) || 0),
+    cashOut: Number(p?.cashOut || 0),
+  };
+}
+
+function playerRefLabel(ref) {
+  return safeName(ref?.name || ref?.displayName || ref?.nickname || "Player");
+}
+
+function playerRefId(ref, fallback = "") {
+  return String(ref?.playerId || ref?.id || fallback || "");
+}
+
+function playerIdentityKey(ref) {
+  const id = playerRefId(ref, "");
+  if (id) return `id:${id}`;
+  return `name:${playerRefLabel(ref).toLowerCase()}`;
+}
+
+function legacyNamePlayerId(name) {
+  return `legacy-name:${encodeURIComponent(safeName(name).toLowerCase())}`;
+}
+
+function isLegacyNamePlayerId(id) {
+  return String(id || "").startsWith("legacy-name:");
+}
+
+function decodeLegacyNamePlayerId(id) {
+  if (!isLegacyNamePlayerId(id)) return "";
+  return decodeURIComponent(String(id).slice("legacy-name:".length));
+}
+
+function playerMatchesSource(ref, sourceId) {
+  if (isLegacyNamePlayerId(sourceId)) {
+    return safeName(ref?.name).toLowerCase() === decodeLegacyNamePlayerId(sourceId);
+  }
+  return playerRefId(ref, "") === sourceId;
+}
+
+function isLinkedPlayer(ref) {
+  const id = playerRefId(ref, "");
+  if (!id) return false;
+  if (String(id).startsWith("unlinked:")) return false;
+  if (isLegacyNamePlayerId(id)) return false;
+  return true;
 }
 
 function defaultDB() {
@@ -82,12 +145,7 @@ function loadDB() {
         prizePerPlayer: Math.max(0, Number(parsed?.live?.prizePerPlayer || 20)),
         players:
           Array.isArray(parsed?.live?.players) && parsed.live.players.length
-            ? parsed.live.players.map((p) => ({
-                id: p.id || uid(),
-                name: p.name || "",
-                buyIns: Math.max(0, parseInt(p.buyIns || 0, 10) || 0),
-                cashOut: Number(p.cashOut || 0),
-              }))
+            ? parsed.live.players.map((p) => normalizeLivePlayer(p))
             : [blankPlayer(), blankPlayer()],
       },
       users: normalizeUsers(parsed.users),
@@ -281,12 +339,7 @@ function csvPayloadToDb(csvText) {
       ...defaultDB().live,
       ...(parts.live || {}),
       players: Array.isArray(parts?.live?.players) && parts.live.players.length
-        ? parts.live.players.map((p) => ({
-            id: p.id || uid(),
-            name: safeName(p.name),
-            buyIns: Math.max(0, parseInt(p.buyIns || 0, 10) || 0),
-            cashOut: Number(p.cashOut || 0),
-          }))
+        ? parts.live.players.map((p) => normalizeLivePlayer(p))
         : [blankPlayer(), blankPlayer()],
     },
   };
@@ -364,13 +417,13 @@ function settleEqualSplitCapped(rows) {
     let rem = Math.max(0, targetTotal - used);
 
     base
-      .sort((a, b) => b.frac - a.frac || b.amount - a.amount || a.name.localeCompare(b.name))
+      .sort((a, b) => b.frac - a.frac || b.amount - a.amount || safeName(a.name).localeCompare(safeName(b.name)))
       .forEach((x) => {
         x[keyOut] = x.floor + (rem > 0 ? 1 : 0);
         if (rem > 0) rem -= 1;
       });
 
-    return base.map((x) => ({ name: x.name, [keyOut]: x[keyOut] }));
+    return base.map((x) => ({ name: x.name, playerId: x.playerId || "", [keyOut]: x[keyOut] }));
   }
 
   const winnersTarget = Math.round(
@@ -385,10 +438,10 @@ function settleEqualSplitCapped(rows) {
   const losersBase = allocateWhole(losersRaw, "loss", target);
 
   const winnersOrder = [...winnersBase].sort((a, b) =>
-    a.name.localeCompare(b.name)
+    safeName(a.name).localeCompare(safeName(b.name))
   );
   const losersSorted = [...losersBase].sort(
-    (a, b) => b.loss - a.loss || a.name.localeCompare(b.name)
+    (a, b) => b.loss - a.loss || safeName(a.name).localeCompare(safeName(b.name))
   );
 
   const txns = [];
@@ -414,7 +467,9 @@ function settleEqualSplitCapped(rows) {
           txns.push({
             id: null,
             from: loser.name,
+            fromId: loser.playerId || "",
             to: winner.name,
+            toId: winner.playerId || "",
             amount: give,
             paid: false,
             paidAt: null,
@@ -432,7 +487,7 @@ function settleEqualSplitCapped(rows) {
 
   return txns.map((t, i) => ({
     ...t,
-    id: t.id || `${t.from}|${t.to}|${t.amount}|${i}`,
+    id: t.id || `${t.fromId || t.from}|${t.toId || t.to}|${t.amount}|${i}`,
   }));
 }
 
@@ -449,8 +504,10 @@ function computeSession(live) {
     const buyInCash = round2(buyIns * cashPerBuyIn);
     const buyInChips = Math.round(buyIns * chipsPerBuyIn);
     const baseNetCash = round2(cashOut - buyInCash);
+    const pid = playerRefId(p, p?.id || uid());
     return {
       ...p,
+      playerId: pid,
       buyIns,
       cashOut,
       buyInCash,
@@ -466,16 +523,18 @@ function computeSession(live) {
   const playerCount = players.length;
   let prizePool = 0;
   let winnerNames = [];
+  let winnerIds = [];
   let winnerPayoutEach = 0;
   if (prizeEnabled && prizePerPlayer > 0 && playerCount >= 2) {
     const topNet = Math.max(...players.map((p) => p.baseNetCash));
     const winners = players.filter((p) => Math.abs(p.baseNetCash - topNet) < 0.0001);
     winnerNames = winners.map((w) => w.label);
+    winnerIds = winners.map((w) => playerRefId(w, w.id || ""));
     prizePool = round2(prizePerPlayer * playerCount);
     winnerPayoutEach = winners.length > 0 ? round2(prizePool / winners.length) : 0;
 
     players = players.map((p) => {
-      const isWinner = winnerNames.includes(p.label);
+      const isWinner = winnerIds.includes(playerRefId(p, p.id || ""));
       const prizeAdj = round2((isWinner ? winnerPayoutEach : 0) - prizePerPlayer);
       const netCash = round2(p.baseNetCash + prizeAdj);
       return {
@@ -498,10 +557,10 @@ function computeSession(live) {
       : null;
 
   const txnsNoPrize = settleEqualSplitCapped(
-    players.map((p) => ({ name: p.label, net: p.baseNetCash }))
+    players.map((p) => ({ name: p.label, playerId: playerRefId(p, p.id || ""), net: p.baseNetCash }))
   );
   const txnsWithPrize = settleEqualSplitCapped(
-    players.map((p) => ({ name: p.label, net: p.netCash }))
+    players.map((p) => ({ name: p.label, playerId: playerRefId(p, p.id || ""), net: p.netCash }))
   );
 
   return {
@@ -520,6 +579,7 @@ function computeSession(live) {
     prizePerPlayer,
     prizePool,
     winnerNames,
+    winnerIds,
     winnerPayoutEach,
   };
 }
@@ -527,6 +587,10 @@ function computeSession(live) {
 function normalizeTransferList(txns) {
   return (Array.isArray(txns) ? txns : []).map((t) => ({
     ...t,
+    fromId: t?.fromId ? String(t.fromId) : "",
+    toId: t?.toId ? String(t.toId) : "",
+    from: safeName(t?.from || t?.fromName || "Player"),
+    to: safeName(t?.to || t?.toName || "Player"),
     paid: !!t.paid,
     paidAt: t.paid ? t.paidAt || null : null,
   }));
@@ -538,6 +602,7 @@ function getSessionTransfers(session, mode) {
     settleEqualSplitCapped(
       players.map((p) => ({
         name: safeName(p.name),
+        playerId: playerRefId(p, p?.id || ""),
         net:
           typeof p.baseNetCash === "number"
             ? p.baseNetCash
@@ -553,7 +618,7 @@ function getSessionTransfers(session, mode) {
   if (Array.isArray(session?.txns)) return normalizeTransferList(session.txns);
   return normalizeTransferList(
     settleEqualSplitCapped(
-      players.map((p) => ({ name: safeName(p.name), net: p.netCash || 0 }))
+      players.map((p) => ({ name: safeName(p.name), playerId: playerRefId(p, p?.id || ""), net: p.netCash || 0 }))
     )
   );
 }
@@ -568,7 +633,9 @@ function aggregateOutstanding(history, mode) {
           sessionId: h.id,
           sessionStamp: h.stamp,
           from: t.from,
+          fromId: t.fromId || "",
           to: t.to,
+          toId: t.toId || "",
           amount: t.amount,
           txId: t.id,
         });
@@ -586,7 +653,9 @@ function aggregatePrizePaymentRows(history) {
         sessionId: h.id,
         sessionStamp: h.stamp,
         from: p.from,
+        fromId: p.fromId || "",
         to: p.to,
+        toId: p.toId || "",
         amount: p.amount,
         paymentId: p.id,
         paid: !!p.paid,
@@ -599,22 +668,25 @@ function aggregatePrizePaymentRows(history) {
 function groupOutstandingByPlayer(rows) {
   const byPlayer = new Map();
 
-  const ensure = (name) => {
-    if (!byPlayer.has(name)) {
-      byPlayer.set(name, {
-        name,
+  const ensure = (ref) => {
+    const key = playerIdentityKey(ref);
+    if (!byPlayer.has(key)) {
+      byPlayer.set(key, {
+        id: playerRefId(ref, ""),
+        name: playerRefLabel(ref),
+        key,
         owes: [],
         owedBy: [],
         totalOwes: 0,
         totalOwedBy: 0,
       });
     }
-    return byPlayer.get(name);
+    return byPlayer.get(key);
   };
 
   rows.forEach((row) => {
-    const from = ensure(row.from);
-    const to = ensure(row.to);
+    const from = ensure({ playerId: row.fromId, name: row.from });
+    const to = ensure({ playerId: row.toId, name: row.to });
 
     from.owes.push(row);
     from.totalOwes = round2(from.totalOwes + row.amount);
@@ -638,25 +710,34 @@ function buildPlayerDebtTrackers(history) {
 
   sessions.forEach((h) => {
     const txns = normalizeTransferList(getSessionTransfers(h, "noPrize")).filter((t) => !t.paid);
-    const involved = new Set();
+    const involved = new Map();
 
     txns.forEach((t) => {
-      involved.add(t.from);
-      involved.add(t.to);
+      involved.set(playerIdentityKey({ playerId: t.fromId, name: t.from }), {
+        playerId: t.fromId || "",
+        name: t.from,
+      });
+      involved.set(playerIdentityKey({ playerId: t.toId, name: t.to }), {
+        playerId: t.toId || "",
+        name: t.to,
+      });
     });
 
-    involved.forEach((name) => {
-      if (!map.has(name)) {
-        map.set(name, {
-          player: name,
+    involved.forEach((ref) => {
+      const key = playerIdentityKey(ref);
+      if (!map.has(key)) {
+        map.set(key, {
+          playerId: ref.playerId || "",
+          player: safeName(ref.name),
+          key,
           totalOwes: 0,
           totalOwed: 0,
           sessions: [],
         });
       }
-      const row = map.get(name);
-      const owes = txns.filter((t) => t.from === name);
-      const owed = txns.filter((t) => t.to === name);
+      const row = map.get(key);
+      const owes = txns.filter((t) => playerIdentityKey({ playerId: t.fromId, name: t.from }) === key);
+      const owed = txns.filter((t) => playerIdentityKey({ playerId: t.toId, name: t.to }) === key);
       const owesTotal = round2(owes.reduce((a, t) => a + t.amount, 0));
       const owedTotal = round2(owed.reduce((a, t) => a + t.amount, 0));
       row.totalOwes = round2(row.totalOwes + owesTotal);
@@ -665,9 +746,21 @@ function buildPlayerDebtTrackers(history) {
         sessionId: h.id,
         stamp: h.stamp,
         owesTo: owes
-          .reduce((m, t) => m.set(t.to, round2((m.get(t.to) || 0) + t.amount)), new Map()),
+          .reduce((m, t) => {
+            const toKey = playerIdentityKey({ playerId: t.toId, name: t.to });
+            const curr = m.get(toKey) || { id: t.toId || "", name: t.to, amount: 0 };
+            curr.amount = round2(curr.amount + t.amount);
+            m.set(toKey, curr);
+            return m;
+          }, new Map()),
         owedBy: owed
-          .reduce((m, t) => m.set(t.from, round2((m.get(t.from) || 0) + t.amount)), new Map()),
+          .reduce((m, t) => {
+            const fromKey = playerIdentityKey({ playerId: t.fromId, name: t.from });
+            const curr = m.get(fromKey) || { id: t.fromId || "", name: t.from, amount: 0 };
+            curr.amount = round2(curr.amount + t.amount);
+            m.set(fromKey, curr);
+            return m;
+          }, new Map()),
         owesTotal,
         owedTotal,
       });
@@ -679,8 +772,8 @@ function buildPlayerDebtTrackers(history) {
       ...p,
       sessions: p.sessions.map((s) => ({
         ...s,
-        owesTo: Array.from(s.owesTo.entries()).map(([name, amount]) => ({ name, amount })),
-        owedBy: Array.from(s.owedBy.entries()).map(([name, amount]) => ({ name, amount })),
+        owesTo: Array.from(s.owesTo.values()),
+        owedBy: Array.from(s.owedBy.values()),
       })),
       net: round2(p.totalOwed - p.totalOwes),
     }))
@@ -737,6 +830,10 @@ function getPrizePaymentsForSession(session) {
   if (Array.isArray(session?.prizePayments)) {
     return session.prizePayments.map((p) => ({
       ...p,
+      fromId: p?.fromId ? String(p.fromId) : "",
+      toId: p?.toId ? String(p.toId) : "",
+      from: safeName(p?.from || p?.fromName || "Player"),
+      to: safeName(p?.to || p?.toName || "Player"),
       paid: !!p.paid,
       paidAt: p.paid ? p.paidAt || null : null,
     }));
@@ -744,18 +841,20 @@ function getPrizePaymentsForSession(session) {
 
   const players = (session?.players || []).map((p, idx) => {
     const name = safeName(p?.name);
+    const playerId = playerRefId(p, p?.id || `legacy:${idx}:${name.toLowerCase()}`);
     const baseNet =
       typeof p?.baseNetCash === "number"
         ? p.baseNetCash
         : round2((p?.netCash || 0) - (p?.prizeAdj || 0));
-    return { idx, name, baseNet };
+    return { idx, playerId, name, baseNet };
   });
   if (!players.length) return [];
 
   const top = Math.max(...players.map((p) => p.baseNet));
-  const winnerIdx = players
-    .filter((p) => Math.abs(p.baseNet - top) < 0.0001)
-    .map((p) => p.idx);
+  const winnerIds = session?.settings?.winnerPlayerIds;
+  const winnerIdx = Array.isArray(winnerIds) && winnerIds.length
+    ? players.filter((p) => winnerIds.includes(p.playerId)).map((p) => p.idx)
+    : players.filter((p) => Math.abs(p.baseNet - top) < 0.0001).map((p) => p.idx);
   if (!winnerIdx.length) return [];
 
   const contributors = players.filter((p) => !winnerIdx.includes(p.idx));
@@ -764,9 +863,11 @@ function getPrizePaymentsForSession(session) {
 
   // If there are multiple winners, assign payers to winners in round-robin.
   return contributors.map((fromPlayer, i) => ({
-    id: `prize:${fromPlayer.idx}:${winners[i % winners.length].idx}:${prizePerPlayer}:${i}`,
+    id: `prize:${fromPlayer.playerId || fromPlayer.idx}:${winners[i % winners.length].playerId || winners[i % winners.length].idx}:${prizePerPlayer}:${i}`,
     from: fromPlayer.name,
+    fromId: fromPlayer.playerId || "",
     to: winners[i % winners.length].name,
+    toId: winners[i % winners.length].playerId || "",
     amount: prizePerPlayer,
     paid: false,
     paidAt: null,
@@ -817,8 +918,14 @@ function MainApp() {
   const [statsCompact, setStatsCompact] = useState(false);
   const [flashMap, setFlashMap] = useState({});
   const [activeEditPlayerId, setActiveEditPlayerId] = useState("");
+  const [addPlayerOpen, setAddPlayerOpen] = useState(false);
+  const [guestPlayerName, setGuestPlayerName] = useState("");
+  const [selectedLinkedPlayerId, setSelectedLinkedPlayerId] = useState("");
+  const [mergeSourcePlayerId, setMergeSourcePlayerId] = useState("");
+  const [mergeTargetPlayerId, setMergeTargetPlayerId] = useState("");
   const [toasts, setToasts] = useState([]);
   const backupInputRef = useRef(null);
+  const addPlayerSelectRef = useRef(null);
   const dbRef = useRef(db);
   const syncStateRef = useRef(syncState);
   const lastSyncAtRef = useRef(lastSyncAt);
@@ -854,6 +961,13 @@ function MainApp() {
     if (!user?.id) return;
     refreshProfiles().catch(() => {});
   }, [refreshProfiles, user?.id]);
+
+  useEffect(() => {
+    if (!addPlayerOpen) return;
+    window.setTimeout(() => {
+      addPlayerSelectRef.current?.focus();
+    }, 10);
+  }, [addPlayerOpen]);
 
   function pushToast(message) {
     const id = `toast-${Date.now()}-${toastSeqRef.current++}`;
@@ -1204,6 +1318,60 @@ function MainApp() {
     () => buildPlayerDebtTrackers(db.history),
     [db.history]
   );
+  const knownPlayerOptions = useMemo(() => {
+    const map = new Map();
+    const push = (id, name, linked = false, email = "") => {
+      const pid = String(id || "");
+      if (!pid) return;
+      if (!map.has(pid)) {
+        map.set(pid, {
+          id: pid,
+          name: safeName(name || "Player"),
+          linked,
+          email: String(email || ""),
+        });
+      }
+    };
+
+    (Array.isArray(profiles) ? profiles : []).forEach((p) => {
+      push(p.id, p.nickname || p.email?.split("@")[0] || "Player", true, p.email || "");
+    });
+
+    (db.live?.players || []).forEach((p) => {
+      const pid = playerRefId(p, "");
+      if (pid) push(pid, p.name || "Player", !!p.linkedProfileId, "");
+    });
+
+    (Array.isArray(db.history) ? db.history : []).forEach((h) => {
+      (h.players || []).forEach((p) => {
+        const pid = playerRefId(p, "");
+        if (pid) push(pid, p.name || "Player", false, "");
+        else push(legacyNamePlayerId(p.name || "Player"), p.name || "Player", false, "");
+      });
+    });
+
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [db.history, db.live?.players, profiles]);
+  const availableLinkedProfiles = useMemo(
+    () =>
+      (profiles || []).filter(
+        (p) => !(db.live?.players || []).some((lp) => playerRefId(lp, "") === p.id)
+      ),
+    [db.live?.players, profiles]
+  );
+  const similarGuestName = useMemo(() => {
+    const q = safeName(guestPlayerName).toLowerCase();
+    if (!q || q === "player") return "";
+    const names = Array.from(
+      new Set(
+        [
+          ...(db.live?.players || []).map((p) => safeName(p.name)),
+          ...knownPlayerOptions.map((p) => safeName(p.name)),
+        ].filter(Boolean)
+      )
+    );
+    return names.find((n) => n.toLowerCase().includes(q) || q.includes(n.toLowerCase())) || "";
+  }, [db.live?.players, guestPlayerName, knownPlayerOptions]);
   const presenceRows = useMemo(() => {
     const now = Date.now();
     const users = Array.isArray(profiles) && profiles.length
@@ -1284,7 +1452,66 @@ function MainApp() {
 
   function addPlayer() {
     updateLive((live) => ({ ...live, players: [...live.players, blankPlayer()] }));
-    pushToast("➕ Player added");
+    pushToast("Player added");
+    setGuestPlayerName("");
+    setSelectedLinkedPlayerId("");
+  }
+
+  function addLinkedPlayer() {
+    const profileRow = (profiles || []).find((p) => p.id === selectedLinkedPlayerId);
+    if (!profileRow) {
+      alert("Select an existing user first.");
+      return;
+    }
+    const exists = (db.live?.players || []).some((p) => playerRefId(p, "") === profileRow.id);
+    if (exists) {
+      alert("That user is already in the live player list.");
+      return;
+    }
+    const rowId = uid();
+    updateLive((live) => ({
+      ...live,
+      players: [
+        ...live.players,
+        {
+          id: rowId,
+          playerId: profileRow.id,
+          linkedProfileId: profileRow.id,
+          name: safeName(profileRow.nickname || profileRow.email?.split("@")[0] || "Player"),
+          buyIns: 0,
+          cashOut: 0,
+        },
+      ],
+    }));
+    pushToast("Player added");
+    setSelectedLinkedPlayerId("");
+    setGuestPlayerName("");
+  }
+
+  function addGuestPlayer() {
+    const name = String(guestPlayerName || "").trim();
+    if (!name) {
+      alert("Enter guest player name.");
+      return;
+    }
+    const rowId = uid();
+    updateLive((live) => ({
+      ...live,
+      players: [
+        ...live.players,
+        {
+          id: rowId,
+          playerId: `unlinked:${rowId}`,
+          linkedProfileId: null,
+          name: safeName(name),
+          buyIns: 0,
+          cashOut: 0,
+        },
+      ],
+    }));
+    pushToast("Player added");
+    setGuestPlayerName("");
+    setSelectedLinkedPlayerId("");
   }
 
   function removePlayer(id) {
@@ -1305,8 +1532,124 @@ function MainApp() {
     }
     updateLive((live) => ({
       ...live,
-      players: last.players.map((p) => ({ id: uid(), name: p.name || "", buyIns: 0, cashOut: 0 })),
+      players: last.players.map((p) => {
+        const rowId = uid();
+        return {
+          id: rowId,
+          playerId: playerRefId(p, rowId),
+          linkedProfileId: playerRefId(p, "").includes("unlinked:") ? null : playerRefId(p, ""),
+          name: safeName(p.name || ""),
+          buyIns: 0,
+          cashOut: 0,
+        };
+      }),
     }));
+  }
+
+  function mergePlayers() {
+    const sourceId = String(mergeSourcePlayerId || "");
+    const targetId = String(mergeTargetPlayerId || "");
+    if (!sourceId || !targetId) {
+      alert("Select both source and target players.");
+      return;
+    }
+    if (sourceId === targetId) {
+      alert("Source and target must be different.");
+      return;
+    }
+    const source = knownPlayerOptions.find((p) => p.id === sourceId);
+    const target = knownPlayerOptions.find((p) => p.id === targetId);
+    const ok = window.confirm(
+      `Merge player records?\n\nFrom: ${source?.name || sourceId}\nInto: ${target?.name || targetId}\n\nThis updates live + history references.`
+    );
+    if (!ok) return;
+
+    const nextHistory = (db.history || []).map((h) => {
+      const players = (h.players || []).map((p) => {
+        if (!playerMatchesSource(p, sourceId)) return p;
+        return {
+          ...p,
+          playerId: targetId,
+          name: target?.name || p.name,
+        };
+      });
+
+      const remapTx = (t) => {
+        const sourceName = decodeLegacyNamePlayerId(sourceId);
+        const fromMatches = t?.fromId === sourceId || (isLegacyNamePlayerId(sourceId) && safeName(t?.from).toLowerCase() === sourceName);
+        const toMatches = t?.toId === sourceId || (isLegacyNamePlayerId(sourceId) && safeName(t?.to).toLowerCase() === sourceName);
+        const nextFromId = fromMatches ? targetId : (t?.fromId || "");
+        const nextToId = toMatches ? targetId : (t?.toId || "");
+        if (nextFromId && nextToId && nextFromId === nextToId) return null;
+        return {
+          ...t,
+          fromId: nextFromId,
+          toId: nextToId,
+          from: fromMatches ? (target?.name || t.from) : t.from,
+          to: toMatches ? (target?.name || t.to) : t.to,
+        };
+      };
+
+      const txnsNoPrize = normalizeTransferList((h.txnsNoPrize || []).map(remapTx).filter(Boolean));
+      const txnsWithPrize = normalizeTransferList((h.txnsWithPrize || []).map(remapTx).filter(Boolean));
+      const txns = normalizeTransferList((h.txns || []).map(remapTx).filter(Boolean));
+      const prizePayments = (Array.isArray(h.prizePayments) ? h.prizePayments : [])
+        .map((p) => {
+          const sourceName = decodeLegacyNamePlayerId(sourceId);
+          const fromMatches = p?.fromId === sourceId || (isLegacyNamePlayerId(sourceId) && safeName(p?.from).toLowerCase() === sourceName);
+          const toMatches = p?.toId === sourceId || (isLegacyNamePlayerId(sourceId) && safeName(p?.to).toLowerCase() === sourceName);
+          const nextFromId = fromMatches ? targetId : (p?.fromId || "");
+          const nextToId = toMatches ? targetId : (p?.toId || "");
+          if (nextFromId && nextToId && nextFromId === nextToId) return null;
+          return {
+            ...p,
+            fromId: nextFromId,
+            toId: nextToId,
+            from: fromMatches ? (target?.name || p.from) : p.from,
+            to: toMatches ? (target?.name || p.to) : p.to,
+          };
+        })
+        .filter(Boolean);
+      const winnerPlayerIds = Array.isArray(h?.settings?.winnerPlayerIds)
+        ? Array.from(new Set(h.settings.winnerPlayerIds.map((id) => (id === sourceId ? targetId : id))))
+        : h?.settings?.winnerPlayerIds;
+
+      return {
+        ...h,
+        settings: {
+          ...(h.settings || {}),
+          winnerPlayerIds,
+        },
+        players,
+        txns,
+        txnsNoPrize,
+        txnsWithPrize,
+        prizePayments,
+      };
+    });
+
+    const nextLive = {
+      ...(db.live || defaultDB().live),
+      players: (db.live?.players || []).map((p) => {
+        if (!playerMatchesSource(p, sourceId)) return p;
+        const nextName = target?.name || p.name;
+        return {
+          ...p,
+          playerId: targetId,
+          linkedProfileId: targetId.startsWith("unlinked:") ? null : targetId,
+          name: nextName,
+        };
+      }),
+    };
+
+    commit({
+      ...db,
+      live: nextLive,
+      history: nextHistory,
+    });
+    pushToast(`Merged ${source?.name || "player"} -> ${target?.name || "player"}`);
+    setMergeSourcePlayerId("");
+    setMergeTargetPlayerId("");
   }
 
   function endAndSaveSession() {
@@ -1330,8 +1673,12 @@ function MainApp() {
         prizePerPlayer: computed.prizePerPlayer,
         prizePool: computed.prizePool,
         winnerNames: computed.winnerNames,
+        winnerPlayerIds: computed.winnerIds,
       },
       players: computed.players.map((p) => ({
+        id: p.id,
+        playerId: playerRefId(p, p.id || ""),
+        linkedProfileId: p.linkedProfileId || null,
         name: p.label,
         buyIns: p.buyIns,
         buyInCash: p.buyInCash,
@@ -1647,9 +1994,6 @@ function MainApp() {
             syncBusy={manualSyncBusy}
             syncDisabled={!hasDatabase()}
           />
-          {tab === "live" ? (
-            <QuickActionsTop onAddPlayer={addPlayer} onLoadLineup={applyLastLineup} />
-          ) : null}
         </section>
 
         <PrimaryNavTabs tabs={navTabs} activeTab={tab} onChange={setTab} />
@@ -1831,6 +2175,43 @@ for update to anon using (true) with check (true);`}
                   Clear Data
                 </button>
               </div>
+              <div className="mt-5 space-y-3">
+                <div className="text-xs uppercase tracking-wide text-emerald-300/60">Merge Players</div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <select
+                    className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
+                    value={mergeSourcePlayerId}
+                    onChange={(e) => setMergeSourcePlayerId(e.target.value)}
+                  >
+                    <option value="">Source player...</option>
+                    {knownPlayerOptions.map((p) => (
+                      <option key={`src-${p.id}`} value={p.id}>
+                        {p.name}{p.linked ? " (linked)" : " (unlinked)"}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
+                    value={mergeTargetPlayerId}
+                    onChange={(e) => setMergeTargetPlayerId(e.target.value)}
+                  >
+                    <option value="">Target player...</option>
+                    {knownPlayerOptions
+                      .filter((p) => p.id !== mergeSourcePlayerId)
+                      .map((p) => (
+                        <option key={`dst-${p.id}`} value={p.id}>
+                          {p.name}{p.linked ? " (linked)" : " (unlinked)"}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <button
+                  className="w-full rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={mergePlayers}
+                >
+                  Merge Players
+                </button>
+              </div>
             </section>
 
             <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
@@ -1907,7 +2288,81 @@ for update to anon using (true) with check (true);`}
         )}
 
         {tab === "live" && (
-          <>
+          <div className="space-y-4 mt-3">
+            <section className="rounded-2xl bg-emerald-950/40 p-4 ring-1 ring-white/10 space-y-4 mt-3">
+              <button
+                type="button"
+                onClick={() => setAddPlayerOpen((v) => !v)}
+                className="flex w-full cursor-pointer items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left transition-all duration-150 hover:bg-white/5 hover:scale-[1.01] active:scale-[0.98]"
+              >
+                <span className="text-sm font-semibold text-emerald-100">Add Player</span>
+                <span className="text-emerald-200/70">{addPlayerOpen ? "Hide" : "Show"}</span>
+              </button>
+              <div
+                className={`grid overflow-hidden transition-all duration-200 ${addPlayerOpen ? "max-h-[420px] opacity-100 translate-y-0" : "max-h-0 opacity-0 -translate-y-1"}`}
+              >
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="text-xs text-emerald-300/60 font-medium">Select existing user</div>
+                    <select
+                      ref={addPlayerSelectRef}
+                      className="h-12 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-emerald-50 outline-none transition-all focus:ring-2 focus:ring-emerald-400/40"
+                      value={selectedLinkedPlayerId}
+                      onChange={(e) => setSelectedLinkedPlayerId(e.target.value)}
+                    >
+                      <option value="">Select registered user...</option>
+                      {availableLinkedProfiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {safeName(p.nickname || p.email?.split("@")[0] || "Player")} {p.email ? `(${p.email})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      className="w-full rounded-xl bg-emerald-700/70 shadow-[0_0_18px_rgba(52,211,153,0.14)] px-4 py-2.5 text-sm font-semibold text-emerald-50 ring-1 ring-emerald-300/20 transition-all duration-150 hover:scale-[1.02] active:scale-[0.97]"
+                      onClick={addLinkedPlayer}
+                    >
+                      Add player
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-white/30 my-2">
+                    <div className="h-px bg-white/10 flex-1" />
+                    <span>or</span>
+                    <div className="h-px bg-white/10 flex-1" />
+                  </div>
+
+                  <div className="space-y-2 pt-3 border-t border-white/5">
+                    <div className="text-xs text-emerald-300/60 font-medium">Add guest player</div>
+                    <input
+                      type="text"
+                      value={guestPlayerName}
+                      onChange={(e) => setGuestPlayerName(e.target.value)}
+                      placeholder="Guest player name"
+                      className="h-12 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-emerald-50 outline-none transition-all focus:ring-2 focus:ring-emerald-400/40"
+                    />
+                    {similarGuestName ? (
+                      <div className="text-xs text-amber-200/90">
+                        ⚠️ Similar player exists. Consider selecting instead.
+                      </div>
+                    ) : null}
+                    <button
+                      className="w-full rounded-xl bg-emerald-900/40 border border-white/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.97]"
+                      onClick={addGuestPlayer}
+                    >
+                      Add guest
+                    </button>
+                  </div>
+
+                  <button
+                    className="w-full rounded-xl bg-emerald-900/40 border border-white/10 px-4 py-2.5 text-sm font-semibold text-emerald-200/90 transition-all duration-150 hover:scale-[1.02] active:scale-[0.97] pt-3 border-t border-white/5"
+                    onClick={applyLastLineup}
+                  >
+                    Load last lineup
+                  </button>
+                </div>
+              </div>
+            </section>
+
             <PrizeSummary computed={computed} money={money} />
 
             <section className="rounded-2xl bg-emerald-950/50 p-3 ring-1 ring-white/10">
@@ -1931,7 +2386,7 @@ for update to anon using (true) with check (true);`}
                 <table className="summary-table">
                   <thead>
                     <tr>
-                      <th>Player</th>
+                      <th className="player-column">Player</th>
                       <th>Buy-ins</th>
                       <th>Cash-out</th>
                       <th>Net (No Prize)</th>
@@ -1942,7 +2397,26 @@ for update to anon using (true) with check (true);`}
                   <tbody>
                     {computed.players.map((p) => (
                       <tr key={`sum-${p.id}`}>
-                        <td>{p.label}</td>
+                        <td className="player-column">
+                          <div
+                            className="player-cell summary-player-cell"
+                            style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}
+                          >
+                            <span
+                              className="player-name summary-player-name"
+                              title={p.label}
+                              style={{
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                flex: 1,
+                                minWidth: 0,
+                              }}
+                            >
+                              {p.label}
+                            </span>
+                          </div>
+                        </td>
                         <td>{p.buyIns}</td>
                         <td>{money(p.cashOut)}</td>
                         <td className={p.baseNetCash >= 0 ? "pos" : "neg"}>
@@ -2113,11 +2587,12 @@ for update to anon using (true) with check (true);`}
                 </div>
               )}
             </section>
+            <div className="mb-20" />
             <BottomStickyAction
               onSave={endAndSaveSession}
               disabled={Math.abs(computed.diff) > 0.01}
             />
-          </>
+          </div>
         )}
 
         {tab === "debts" && (
@@ -2349,7 +2824,20 @@ for update to anon using (true) with check (true);`}
                                     : round2((p.netCash || 0) - (p.prizeAdj || 0));
                                 return (
                                   <>
-                              <td>{p.name}</td>
+                              <td>
+                                <div className="flex items-center gap-2">
+                                  <span>{p.name}</span>
+                                  <span
+                                    className={
+                                      isLinkedPlayer(p)
+                                        ? "inline-flex rounded-full bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-400/30"
+                                        : "inline-flex rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-slate-200 ring-1 ring-white/20"
+                                    }
+                                  >
+                                    {isLinkedPlayer(p) ? "Linked" : "Guest"}
+                                  </span>
+                                </div>
+                              </td>
                               <td>{p.buyIns}</td>
                               <td>{money(p.cashOut)}</td>
                               <td className={baseNet >= 0 ? "pos" : "neg"}>

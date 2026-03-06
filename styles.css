@@ -375,9 +375,10 @@ pre { overflow-x: auto; max-width: 100%; }
 }
 .summary-table-wrap { overflow-x: auto; }
 .summary-table {
-  min-width: 620px;
-  border-collapse: collapse;
+  min-width: 100%;
   width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
 }
 .summary-table th,
 .summary-table td {
@@ -385,12 +386,71 @@ pre { overflow-x: auto; max-width: 100%; }
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 13px;
   line-height: 1.4;
+  white-space: nowrap;
 }
 .summary-table th {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-size: 11px;
+}
+.summary-table .player-column {
+  width: 40% !important;
+  min-width: 140px;
+  text-align: left;
+}
+td.player-column {
+  padding: 8px;
+  vertical-align: middle;
+}
+.summary-table td:nth-child(n+2),
+.summary-table th:nth-child(n+2) {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.player-cell,
+.summary-player-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+.player-name,
+.summary-player-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge,
+.summary-player-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.1;
+  padding: 2px 6px;
+}
+.summary-player-badge {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  font-size: 10px;
+  line-height: 1;
+}
+.summary-player-badge--linked {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+.summary-player-badge--guest {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
 }
 
 .table-panel { overflow-x: auto; }
@@ -400,6 +460,7 @@ table {
   width: 100%;
   border-collapse: collapse;
   min-width: 760px;
+  table-layout: fixed;
 }
 th, td {
   border-bottom: 1px solid rgba(255, 255, 255, 0.09);
@@ -883,6 +944,26 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
     font-size: 10.5px;
     padding: 5px 4px;
     line-height: 1.2;
+  }
+  .summary-table th,
+  .summary-table td {
+    white-space: nowrap;
+    word-break: normal;
+    font-size: 11px;
+    padding: 6px 6px;
+    line-height: 1.25;
+  }
+  .summary-table .player-column {
+    width: 40%;
+  }
+  .summary-table td:nth-child(n+2),
+  .summary-table th:nth-child(n+2) {
+    padding-left: 5px;
+    padding-right: 5px;
+  }
+  .summary-table th:not(.player-column),
+  .summary-table td:not(.player-column) {
+    width: 12%;
   }
   .history-head strong { font-size: 13px; }
   .history-meta { font-size: 11px; }
