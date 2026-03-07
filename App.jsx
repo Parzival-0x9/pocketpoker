@@ -2384,6 +2384,14 @@ for update to anon using (true) with check (true);`}
               </div>
               <div className="summary-table-wrap">
                 <table className="summary-table">
+                  <colgroup>
+                    <col style={{ width: "45%" }} />
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "11%" }} />
+                  </colgroup>
                   <thead>
                     <tr>
                       <th className="player-column">Player</th>
