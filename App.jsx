@@ -498,20 +498,28 @@ function computeSession(live) {
   const cashPerBuyIn = Math.max(1, Number(live.buyInCashAmount) || 50);
   const chipsPerBuyIn = Math.max(1, Number(live.buyInChipStack) || 50);
   const chipsPerDollar = chipsPerBuyIn / cashPerBuyIn;
-  const prizeEnabled = !!live.prizeEnabled;
+  const mode = live?.mode === "cash" ? "cash" : "tournament";
+  const isCashMode = mode === "cash";
+  const prizeEnabled = isCashMode ? false : !!live.prizeEnabled;
   const prizePerPlayer = Math.max(0, Number(live.prizePerPlayer) || 0);
 
   let players = (live.players || []).map((p) => {
     const buyIns = Math.max(0, parseInt(p.buyIns || 0, 10) || 0);
-    const cashOut = Number(p.cashOut || 0);
+    const rawCashOut = Number(p.cashOut || 0);
     const buyInCash = round2(buyIns * cashPerBuyIn);
     const buyInChips = Math.round(buyIns * chipsPerBuyIn);
+    const finalChips = isCashMode ? Math.max(0, rawCashOut) : null;
+    const cashOut = isCashMode
+      ? round2((Math.max(0, rawCashOut) / chipsPerBuyIn) * cashPerBuyIn)
+      : rawCashOut;
     const baseNetCash = round2(cashOut - buyInCash);
     const pid = playerRefId(p, p?.id || uid());
     return {
       ...p,
       playerId: pid,
       buyIns,
+      cashOutInput: isCashMode ? Math.max(0, rawCashOut) : rawCashOut,
+      finalChips,
       cashOut,
       buyInCash,
       buyInChips,
@@ -578,6 +586,8 @@ function computeSession(live) {
     leader,
     cashPerBuyIn,
     chipsPerBuyIn,
+    mode,
+    isCashMode,
     prizeEnabled,
     prizePerPlayer,
     prizePool,
@@ -2393,7 +2403,7 @@ for update to anon using (true) with check (true);`}
               </div>
             </section>
 
-            <PrizeSummary computed={computed} money={money} />
+            {computed.isCashMode ? null : <PrizeSummary computed={computed} money={money} />}
 
             <section className="rounded-2xl bg-emerald-950/50 p-3 ring-1 ring-white/10">
               <BalanceStatus difference={computed.diff} money={money} />
@@ -2409,7 +2419,7 @@ for update to anon using (true) with check (true);`}
               <div className="session-summary-head">
                 <h3>Game Summary</h3>
                 <span className="muted small">
-                  Buy-ins vs cash-outs reference
+                  {computed.isCashMode ? "Buy-ins vs final payouts reference" : "Buy-ins vs cash-outs reference"}
                 </span>
               </div>
               <div className="summary-table-wrap">
@@ -2419,9 +2429,9 @@ for update to anon using (true) with check (true);`}
                       <th className="player-column">Player</th>
                       <th>Buy-ins</th>
                       <th>Cash-out</th>
-                      <th>Net (No Prize)</th>
-                      <th>Prize Adj</th>
-                      <th>Net (With Prize)</th>
+                      <th>{computed.isCashMode ? "Profit/Loss" : "Net (No Prize)"}</th>
+                      {computed.isCashMode ? null : <th>Prize Adj</th>}
+                      {computed.isCashMode ? null : <th>Net (With Prize)</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -2452,10 +2462,12 @@ for update to anon using (true) with check (true);`}
                         <td className={p.baseNetCash >= 0 ? "pos" : "neg"}>
                           {money(p.baseNetCash)}
                         </td>
-                        <td className={p.prizeAdj >= 0 ? "pos" : "neg"}>
-                          {p.prizeAdj >= 0 ? "+" : ""}{money(p.prizeAdj)}
-                        </td>
-                        <td className={p.netCash >= 0 ? "pos" : "neg"}>{money(p.netCash)}</td>
+                        {computed.isCashMode ? null : (
+                          <td className={p.prizeAdj >= 0 ? "pos" : "neg"}>
+                            {p.prizeAdj >= 0 ? "+" : ""}{money(p.prizeAdj)}
+                          </td>
+                        )}
+                        {computed.isCashMode ? null : <td className={p.netCash >= 0 ? "pos" : "neg"}>{money(p.netCash)}</td>}
                       </tr>
                     ))}
                   </tbody>
@@ -2471,7 +2483,7 @@ for update to anon using (true) with check (true);`}
                       <th>Player</th>
                       <th>Buy-ins</th>
                       <th>Buy-in Value</th>
-                      <th>Cash-out</th>
+                      <th>{computed.isCashMode ? "Final Chips" : "Cash-out"}</th>
                       <th>Net</th>
                       <th>Action</th>
                     </tr>
@@ -2516,9 +2528,9 @@ for update to anon using (true) with check (true);`}
                           <input
                             type="number"
                             min="0"
-                            step="0.01"
+                            step={computed.isCashMode ? "1" : "0.01"}
                             className={flashMap[`${p.id}-cashout`] === "up" ? "field-flash-up" : flashMap[`${p.id}-cashout`] ? "field-flash-neutral" : ""}
-                            value={Number(p.cashOut || 0) === 0 ? "" : p.cashOut}
+                            value={Number(p.cashOutInput || 0) === 0 ? "" : p.cashOutInput}
                             onChange={(e) => updatePlayer(p.id, { cashOut: Number(e.target.value || 0) })}
                             onFocus={() => setActiveEditPlayerId(p.id)}
                           />
@@ -2578,13 +2590,13 @@ for update to anon using (true) with check (true);`}
                       <span>{money(p.buyInCash)} · {p.buyInChips.toLocaleString()} chips</span>
                     </div>
                     <div className="mobile-player-row">
-                      <span className="muted">Cash-out</span>
+                      <span className="muted">{computed.isCashMode ? "Final chips" : "Cash-out"}</span>
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
+                        step={computed.isCashMode ? "1" : "0.01"}
                         className={flashMap[`${p.id}-cashout`] === "up" ? "field-flash-up" : flashMap[`${p.id}-cashout`] ? "field-flash-neutral" : ""}
-                        value={Number(p.cashOut || 0) === 0 ? "" : p.cashOut}
+                        value={Number(p.cashOutInput || 0) === 0 ? "" : p.cashOutInput}
                         onChange={(e) => updatePlayer(p.id, { cashOut: Number(e.target.value || 0) })}
                         onFocus={() => setActiveEditPlayerId(p.id)}
                       />
