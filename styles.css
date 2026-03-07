@@ -160,7 +160,7 @@ input, select {
   font-weight: 800;
 }
 
-.content { display: grid; gap: 18px; }
+.content { display: flex; flex-direction: column; gap: 18px; }
 
 .stats-hero-wrap {
   position: sticky;
