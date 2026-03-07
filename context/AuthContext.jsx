@@ -65,7 +65,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [profiles, setProfiles] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
 
   async function loadProfile(nextUser) {
     if (!supabase || !nextUser?.id) {
@@ -127,12 +127,8 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let mounted = true;
-    const loadingFallbackId = window.setTimeout(() => {
-      if (mounted) setLoading(false);
-    }, 8000);
     if (!hasSupabase || !supabase) {
-      setLoading(false);
-      window.clearTimeout(loadingFallbackId);
+      setAuthLoading(false);
       return () => {};
     }
 
@@ -158,7 +154,7 @@ export function AuthProvider({ children }) {
         const nextUser = nextSession?.user || null;
         setSession(nextSession);
         setUser(nextUser);
-        setLoading(false);
+        setAuthLoading(false);
         void hydrateUser(nextUser);
       } catch {
         if (!mounted) return;
@@ -166,7 +162,7 @@ export function AuthProvider({ children }) {
         setUser(null);
         setProfile(null);
         setProfiles([]);
-        setLoading(false);
+        setAuthLoading(false);
       }
     })();
 
@@ -176,7 +172,7 @@ export function AuthProvider({ children }) {
       const nextUser = nextSession?.user || null;
       setSession(nextSession || null);
       setUser(nextUser);
-      setLoading(false);
+      setAuthLoading(false);
       if (nextUser) {
         void hydrateUser(nextUser);
       } else {
@@ -187,7 +183,6 @@ export function AuthProvider({ children }) {
 
     return () => {
       mounted = false;
-      window.clearTimeout(loadingFallbackId);
       subscription.unsubscribe();
     };
   }, []);
@@ -292,7 +287,8 @@ export function AuthProvider({ children }) {
   const value = useMemo(
     () => ({
       hasSupabase,
-      loading,
+      authLoading,
+      loading: authLoading,
       session,
       user,
       profile,
@@ -305,7 +301,7 @@ export function AuthProvider({ children }) {
       updatePassword,
       requestPasswordReset,
     }),
-    [loading, session, user, profile, profiles]
+    [authLoading, session, user, profile, profiles]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

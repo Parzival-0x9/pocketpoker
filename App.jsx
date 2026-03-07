@@ -904,7 +904,7 @@ class ErrorBoundary extends React.Component {
 }
 
 function MainApp() {
-  const { user, profile, profiles, refreshProfiles, signOut, loading: authLoading } = useAuth();
+  const { user, profile, profiles, refreshProfiles, signOut, authLoading } = useAuth();
   const [db, setDB] = useState(() => loadDB());
   const [syncState, setSyncState] = useState(() => (hasDatabase() ? "connecting" : "local-only"));
   const [syncError, setSyncError] = useState("");
