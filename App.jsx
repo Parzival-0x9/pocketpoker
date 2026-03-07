@@ -2114,25 +2114,21 @@ function MainApp() {
                 </label>
                 <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 sm:col-span-2">
                   <div className="text-xs uppercase tracking-wide text-emerald-300/60">Game Mode</div>
-                  <div className="game-mode-options text-sm text-emerald-100">
-                    <label className="inline-flex items-center gap-2 text-emerald-100">
-                      <input
-                        type="radio"
-                        name="game-mode"
-                        checked={(db.live?.mode || "tournament") === "tournament"}
-                        onChange={() => setGameMode("tournament")}
-                      />
+                  <div className="game-mode-toggle">
+                    <button
+                      type="button"
+                      className={(db.live?.mode || "tournament") === "tournament" ? "mode-btn active" : "mode-btn"}
+                      onClick={() => setGameMode("tournament")}
+                    >
                       Tournament
-                    </label>
-                    <label className="inline-flex items-center gap-2 text-emerald-100">
-                      <input
-                        type="radio"
-                        name="game-mode"
-                        checked={db.live?.mode === "cash"}
-                        onChange={() => setGameMode("cash")}
-                      />
+                    </button>
+                    <button
+                      type="button"
+                      className={db.live?.mode === "cash" ? "mode-btn active" : "mode-btn"}
+                      onClick={() => setGameMode("cash")}
+                    >
                       Cash Game
-                    </label>
+                    </button>
                   </div>
                 </div>
               </div>

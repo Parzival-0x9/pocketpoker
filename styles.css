@@ -354,10 +354,23 @@ pre { overflow-x: auto; max-width: 100%; }
 
 .actions-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions-col { display: grid; gap: 8px; margin-bottom: 8px; }
-.game-mode-options {
+.game-mode-toggle {
   display: flex;
-  gap: 12px;
-  align-items: center;
+  gap: 10px;
+}
+.mode-btn {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-weight: 500;
+}
+.mode-btn.active {
+  background: linear-gradient(135deg, #f7b955, #e8a63c);
+  color: #000;
+  border: none;
 }
 .admin-settings-panel { border-color: rgba(220, 38, 38, 0.3); }
 .admin-settings-row {
@@ -936,11 +949,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .tabs-wrap { padding: 5px; position: relative; z-index: 1; backdrop-filter: blur(6px); }
   .sync-strip { margin-top: 2px; padding: 4px 9px; }
   .sync-now-btn { padding: 3px 8px; font-size: 11px; }
-  .game-mode-options {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
+  .game-mode-toggle { gap: 8px; }
   .actions-row .btn { flex: 1 1 calc(50% - 4px); }
   .admin-settings-row { flex-direction: column; align-items: flex-start; }
   .admin-settings-row .btn { width: 100%; }
