@@ -511,53 +511,60 @@ function settleEqualSplitCapped(rows) {
   }));
 }
 
-function settleViaPotHolder(rows, potHolderPlayerId) {
-  const holderId = resolvePotHolderPlayerId(rows, potHolderPlayerId);
-  if (!holderId) return [];
-  const holder = rows.find((p) => playerRefId(p, p?.id || "") === holderId);
-  if (!holder) return [];
+function settleCashOptimized(rows) {
+  const creditors = rows
+    .map((p) => ({
+      name: safeName(p.name),
+      playerId: playerRefId(p, p?.id || ""),
+      amount: round2(Number(p.net) || 0),
+    }))
+    .filter((p) => p.amount > 0.0001);
+
+  const debtors = rows
+    .map((p) => ({
+      name: safeName(p.name),
+      playerId: playerRefId(p, p?.id || ""),
+      amount: round2(Math.abs(Math.min(0, Number(p.net) || 0))),
+    }))
+    .filter((p) => p.amount > 0.0001);
 
   const txns = [];
-  rows.forEach((p) => {
-    const pid = playerRefId(p, p?.id || "");
-    if (!pid || pid === holderId) return;
-    const net = round2(Number(p.net) || 0);
-    if (net < -0.0001) {
-      txns.push({
-        id: null,
-        from: safeName(p.name),
-        fromId: pid,
-        to: safeName(holder.name),
-        toId: holderId,
-        amount: round2(-net),
-        paid: false,
-        paidAt: null,
-        method: null,
-      });
-    }
-  });
-  rows.forEach((p) => {
-    const pid = playerRefId(p, p?.id || "");
-    if (!pid || pid === holderId) return;
-    const net = round2(Number(p.net) || 0);
-    if (net > 0.0001) {
-      txns.push({
-        id: null,
-        from: safeName(holder.name),
-        fromId: holderId,
-        to: safeName(p.name),
-        toId: pid,
-        amount: net,
-        paid: false,
-        paidAt: null,
-        method: null,
-      });
-    }
-  });
+  const sortDesc = (a, b) => b.amount - a.amount;
+
+  creditors.sort(sortDesc);
+  debtors.sort(sortDesc);
+
+  while (creditors.length && debtors.length) {
+    const creditor = creditors[0];
+    const debtor = debtors[0];
+    const payment = round2(Math.min(creditor.amount, debtor.amount));
+    if (payment <= 0.0001) break;
+
+    txns.push({
+      id: null,
+      from: debtor.name,
+      fromId: debtor.playerId || "",
+      to: creditor.name,
+      toId: creditor.playerId || "",
+      amount: payment,
+      paid: false,
+      paidAt: null,
+      method: null,
+    });
+
+    creditor.amount = round2(creditor.amount - payment);
+    debtor.amount = round2(debtor.amount - payment);
+
+    if (creditor.amount <= 0.0001) creditors.shift();
+    if (debtor.amount <= 0.0001) debtors.shift();
+
+    creditors.sort(sortDesc);
+    debtors.sort(sortDesc);
+  }
 
   return txns.map((t, i) => ({
     ...t,
-    id: `${t.fromId || t.from}|${t.toId || t.to}|${t.amount}|holder|${i}`,
+    id: `${t.fromId || t.from}|${t.toId || t.to}|${t.amount}|cash|${i}`,
   }));
 }
 
@@ -642,9 +649,8 @@ function computeSession(live) {
   );
   const potHolderPlayerId = resolvePotHolderPlayerId(players, live?.potHolderPlayerId);
   const potHolderPlayer = players.find((p) => playerRefId(p, p.id || "") === potHolderPlayerId) || null;
-  const txnsCashPotHolder = settleViaPotHolder(
-    players.map((p) => ({ name: p.label, playerId: playerRefId(p, p.id || ""), net: p.baseNetCash })),
-    potHolderPlayerId
+  const txnsCashPotHolder = settleCashOptimized(
+    players.map((p) => ({ name: p.label, playerId: playerRefId(p, p.id || ""), net: p.baseNetCash }))
   );
   const liveSettlementTxns = isCashMode ? txnsCashPotHolder : txnsWithPrize;
 
