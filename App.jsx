@@ -116,6 +116,7 @@ function defaultDB() {
     live: {
       id: "live",
       title: "Classmates Live Session",
+      mode: "tournament",
       buyInCashAmount: 50,
       buyInChipStack: 50,
       prizeEnabled: true,
@@ -141,6 +142,7 @@ function loadDB() {
       live: {
         ...defaultDB().live,
         ...(parsed.live || {}),
+        mode: parsed?.live?.mode === "cash" ? "cash" : "tournament",
         prizeEnabled: typeof parsed?.live?.prizeEnabled === "boolean" ? parsed.live.prizeEnabled : true,
         prizePerPlayer: Math.max(0, Number(parsed?.live?.prizePerPlayer || 20)),
         players:
@@ -338,6 +340,7 @@ function csvPayloadToDb(csvText) {
     live: {
       ...defaultDB().live,
       ...(parts.live || {}),
+      mode: parts?.live?.mode === "cash" ? "cash" : "tournament",
       players: Array.isArray(parts?.live?.players) && parts.live.players.length
         ? parts.live.players.map((p) => normalizeLivePlayer(p))
         : [blankPlayer(), blankPlayer()],
@@ -1431,6 +1434,13 @@ function MainApp() {
     }));
   }
 
+  function setGameMode(v) {
+    updateLive((live) => ({
+      ...live,
+      mode: v === "cash" ? "cash" : "tournament",
+    }));
+  }
+
   function updatePlayer(playerId, patch) {
     const prevPlayer = (db.live?.players || []).find((p) => p.id === playerId) || null;
     if (Object.prototype.hasOwnProperty.call(patch, "buyIns")) {
@@ -2101,6 +2111,29 @@ function MainApp() {
                     onChange={(e) => setPrizeEnabled(e.target.checked)}
                   />
                 </label>
+                <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 sm:col-span-2">
+                  <div className="text-xs uppercase tracking-wide text-emerald-300/60">Game Mode</div>
+                  <div className="flex flex-wrap items-center gap-4 text-sm text-emerald-100">
+                    <label className="inline-flex items-center gap-2 text-emerald-100">
+                      <input
+                        type="radio"
+                        name="game-mode"
+                        checked={(db.live?.mode || "tournament") === "tournament"}
+                        onChange={() => setGameMode("tournament")}
+                      />
+                      Tournament
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-emerald-100">
+                      <input
+                        type="radio"
+                        name="game-mode"
+                        checked={db.live?.mode === "cash"}
+                        onChange={() => setGameMode("cash")}
+                      />
+                      Cash Game
+                    </label>
+                  </div>
+                </div>
               </div>
               <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-xs uppercase tracking-wide text-emerald-300/60">Current mapping</div>
