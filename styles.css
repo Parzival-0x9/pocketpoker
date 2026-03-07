@@ -950,8 +950,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .history-card, .history-group, .history-table-wrap { min-width: 0; }
   .history-prize-line { white-space: normal; word-break: break-word; font-size: 12px; line-height: 1.25; }
   .history-meta, .history-head { max-width: 100%; }
-  .history-subtable th, .history-subtable td,
-  .summary-table th, .summary-table td {
+  .history-subtable th, .history-subtable td {
     white-space: normal;
     word-break: break-word;
     font-size: 10.5px;
