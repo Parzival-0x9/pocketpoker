@@ -373,6 +373,13 @@ pre { overflow-x: auto; max-width: 100%; }
   gap: 8px;
   margin-bottom: 8px;
 }
+.session-summary-head::after {
+  content: "Swipe →";
+  font-size: 11px;
+  opacity: 0.6;
+  align-self: center;
+  color: var(--muted);
+}
 .summary-table-wrap {
   max-width: 100%;
   overflow-x: auto;
