@@ -46,20 +46,64 @@ function blankPlayer() {
     linkedProfileId: null,
     name: "",
     buyIns: 0,
+    buyInEntries: [],
     cashOut: 0,
   };
 }
 
-function normalizeLivePlayer(p) {
+function normalizeBuyInEntries(entries, fallbackCount = 0, defaultAmount = 0) {
+  const amountDefault = round2(Math.max(0, Number(defaultAmount) || 0));
+  const source = Array.isArray(entries)
+    ? entries.map((e) => ({
+        amount: round2(Math.max(0, Number(e?.amount ?? amountDefault) || 0)),
+        paid: !!e?.paid,
+      }))
+    : [];
+  const count = Math.max(0, parseInt(fallbackCount || 0, 10) || 0);
+  if (source.length >= count) return source.slice(0, count);
+  return [
+    ...source,
+    ...Array.from({ length: count - source.length }, () => ({
+      amount: amountDefault,
+      paid: false,
+    })),
+  ];
+}
+
+function syncBuyInEntries(player, nextBuyInCount, buyInAmount) {
+  const count = Math.max(0, parseInt(nextBuyInCount || 0, 10) || 0);
+  const entries = normalizeBuyInEntries(player?.buyInEntries, player?.buyIns, buyInAmount);
+  if (entries.length === count) return entries;
+  if (entries.length > count) return entries.slice(0, count);
+  return [
+    ...entries,
+    ...Array.from({ length: count - entries.length }, () => ({
+      amount: round2(Math.max(0, Number(buyInAmount) || 0)),
+      paid: false,
+    })),
+  ];
+}
+
+function normalizeLivePlayer(p, buyInAmount = 0) {
   const rowId = String(p?.id || uid());
   const linkedProfileId = p?.linkedProfileId ? String(p.linkedProfileId) : null;
   const playerId = String(p?.playerId || linkedProfileId || rowId);
+  const buyIns = Math.max(
+    0,
+    parseInt(
+      p?.buyIns ??
+      (Array.isArray(p?.buyInEntries) ? p.buyInEntries.length : 0),
+      10
+    ) || 0
+  );
+  const defaultBuyInAmount = Math.max(0, Number(buyInAmount || 0) || 0);
   return {
     id: rowId,
     playerId,
     linkedProfileId: linkedProfileId || (playerId.includes("unlinked:") ? null : playerId),
     name: safeName(p?.name || ""),
-    buyIns: Math.max(0, parseInt(p?.buyIns || 0, 10) || 0),
+    buyIns,
+    buyInEntries: normalizeBuyInEntries(p?.buyInEntries, buyIns, defaultBuyInAmount),
     cashOut: Number(p?.cashOut || 0),
   };
 }
@@ -147,7 +191,7 @@ function loadDB() {
     const parsed = JSON.parse(raw);
     const players =
       Array.isArray(parsed?.live?.players) && parsed.live.players.length
-        ? parsed.live.players.map((p) => normalizeLivePlayer(p))
+        ? parsed.live.players.map((p) => normalizeLivePlayer(p, Number(parsed?.live?.buyInCashAmount || 0)))
         : [blankPlayer(), blankPlayer()];
     return {
       ...defaultDB(),
@@ -352,7 +396,7 @@ function csvPayloadToDb(csvText) {
     live: (() => {
       const players =
         Array.isArray(parts?.live?.players) && parts.live.players.length
-          ? parts.live.players.map((p) => normalizeLivePlayer(p))
+          ? parts.live.players.map((p) => normalizeLivePlayer(p, Number(parts?.live?.buyInCashAmount || 0)))
           : [blankPlayer(), blankPlayer()];
       return {
         ...defaultDB().live,
@@ -566,6 +610,44 @@ function settleCashOptimized(rows) {
     ...t,
     id: `${t.fromId || t.from}|${t.toId || t.to}|${t.amount}|cash|${i}`,
   }));
+}
+
+function calculateOutstandingBuyIns(live) {
+  const cashPerBuyIn = round2(Math.max(0, Number(live?.buyInCashAmount) || 0));
+  const rows = Array.isArray(live?.players) ? live.players : [];
+  const potHolderId = resolvePotHolderPlayerId(rows, live?.potHolderPlayerId);
+  const potHolderRow = rows.find((p) => playerRefId(p, p?.id || "") === potHolderId) || null;
+  let total = 0;
+  let collected = 0;
+  const debts = [];
+
+  rows.forEach((p) => {
+    const pid = playerRefId(p, p?.id || "");
+    const entries = normalizeBuyInEntries(p?.buyInEntries, p?.buyIns, cashPerBuyIn);
+    const playerTotal = round2(entries.reduce((sum, e) => sum + round2(e.amount), 0));
+    const playerCollected = round2(entries.filter((e) => e.paid).reduce((sum, e) => sum + round2(e.amount), 0));
+    const unpaid = round2(playerTotal - playerCollected);
+    total = round2(total + playerTotal);
+    collected = round2(collected + playerCollected);
+    if (unpaid > 0.0001 && pid && pid !== potHolderId) {
+      debts.push({
+        playerId: pid,
+        potHolderId,
+        amount: unpaid,
+        playerName: safeName(p?.name),
+        potHolderName: safeName(potHolderRow?.name || "Pot Holder"),
+      });
+    }
+  });
+
+  debts.sort((a, b) => b.amount - a.amount || a.playerName.localeCompare(b.playerName));
+  return {
+    debts,
+    collected,
+    total,
+    potHolderId,
+    potHolderName: safeName(potHolderRow?.name || "Pot Holder"),
+  };
 }
 
 function computeSession(live) {
@@ -1393,6 +1475,10 @@ function MainApp() {
     });
   }
   const computed = useMemo(() => computeSession(db.live), [db.live]);
+  const buyInDebtSummary = useMemo(
+    () => (db.live?.mode === "cash" ? calculateOutstandingBuyIns(db.live) : { debts: [], collected: 0, total: 0, potHolderId: "", potHolderName: "" }),
+    [db.live]
+  );
   const lastClear = useMemo(
     () =>
       (db.adminEvents || [])
@@ -1560,10 +1646,39 @@ function MainApp() {
       flashField(`${playerId}-cashout`, nextVal > prevVal ? "up" : "neutral");
     }
     setActiveEditPlayerId(playerId);
-    updateLive((live) => ({
-      ...live,
-      players: live.players.map((p) => (p.id === playerId ? { ...p, ...patch } : p)),
-    }));
+    updateLive((live) => {
+      const cashPerBuyIn = Math.max(1, Number(live?.buyInCashAmount) || 1);
+      return {
+        ...live,
+        players: live.players.map((p) => {
+          if (p.id !== playerId) return p;
+          const next = { ...p, ...patch };
+          if (Object.prototype.hasOwnProperty.call(patch, "buyIns")) {
+            const nextBuyIns = Math.max(0, parseInt(patch.buyIns || 0, 10) || 0);
+            next.buyIns = nextBuyIns;
+            next.buyInEntries = syncBuyInEntries(next, nextBuyIns, cashPerBuyIn);
+          }
+          return next;
+        }),
+      };
+    });
+  }
+
+  function setPlayerBuyInPaidStatus(playerId, paid) {
+    updateLive((live) => {
+      const cashPerBuyIn = Math.max(1, Number(live?.buyInCashAmount) || 1);
+      return {
+        ...live,
+        players: live.players.map((p) => {
+          if (p.id !== playerId) return p;
+          const entries = syncBuyInEntries(p, p.buyIns, cashPerBuyIn).map((e) => ({
+            amount: round2(Math.max(0, Number(e.amount) || cashPerBuyIn)),
+            paid: !!paid,
+          }));
+          return { ...p, buyInEntries: entries };
+        }),
+      };
+    });
   }
 
   function addPlayer() {
@@ -1595,6 +1710,7 @@ function MainApp() {
           linkedProfileId: profileRow.id,
           name: safeName(profileRow.nickname || profileRow.email?.split("@")[0] || "Player"),
           buyIns: 0,
+          buyInEntries: [],
           cashOut: 0,
         },
       ],
@@ -1621,6 +1737,7 @@ function MainApp() {
           linkedProfileId: null,
           name: safeName(name),
           buyIns: 0,
+          buyInEntries: [],
           cashOut: 0,
         },
       ],
@@ -1656,6 +1773,7 @@ function MainApp() {
           linkedProfileId: playerRefId(p, "").includes("unlinked:") ? null : playerRefId(p, ""),
           name: safeName(p.name || ""),
           buyIns: 0,
+          buyInEntries: [],
           cashOut: 0,
         };
       }),
@@ -1801,6 +1919,7 @@ function MainApp() {
         linkedProfileId: p.linkedProfileId || null,
         name: p.label,
         buyIns: p.buyIns,
+        buyInEntries: normalizeBuyInEntries(p.buyInEntries, p.buyIns, computed.cashPerBuyIn),
         buyInCash: p.buyInCash,
         buyInChips: p.buyInChips,
         cashOut: p.cashOut,
@@ -1823,7 +1942,7 @@ function MainApp() {
 
     const nextLive = {
       ...db.live,
-      players: db.live.players.map((p) => ({ ...p, buyIns: 0, cashOut: 0 })),
+      players: db.live.players.map((p) => ({ ...p, buyIns: 0, buyInEntries: [], cashOut: 0 })),
     };
 
     const nextHistory = [snapshot, ...db.history];
@@ -2601,6 +2720,15 @@ for update to anon using (true) with check (true);`}
               </div>
             </section>
 
+            {computed.isCashMode && (
+              <section className="panel buyin-progress-panel">
+                <div className="buyin-progress-head">
+                  <span className="muted">Pot Collected</span>
+                  <strong>{money(buyInDebtSummary.collected)} / {money(buyInDebtSummary.total)}</strong>
+                </div>
+              </section>
+            )}
+
             <section className="panel table-panel">
               <div className="desktop-table-wrap">
                 <table>
@@ -2646,6 +2774,26 @@ for update to anon using (true) with check (true);`}
                       <td>
                         <div>{money(p.buyInCash)}</div>
                         <div className="muted small">{p.buyInChips.toLocaleString()} chips</div>
+                        {computed.isCashMode ? (
+                          <div className="buyin-status-row">
+                            <span className="muted small">Payment:</span>
+                            {(() => {
+                              const entries = normalizeBuyInEntries(p.buyInEntries, p.buyIns, computed.cashPerBuyIn);
+                              const hasEntries = entries.length > 0;
+                              const allPaid = hasEntries && entries.every((e) => !!e.paid);
+                              return (
+                                <button
+                                  type="button"
+                                  className={`buyin-status-toggle ${allPaid ? "is-paid" : "is-unpaid"}`}
+                                  disabled={!hasEntries}
+                                  onClick={() => setPlayerBuyInPaidStatus(p.id, !allPaid)}
+                                >
+                                  {allPaid ? "Paid ✓" : "Unpaid"}
+                                </button>
+                              );
+                            })()}
+                          </div>
+                        ) : null}
                         {computed.prizeEnabled && (
                           <div className="prize-chip">Prize adj: {p.prizeAdj >= 0 ? "+" : ""}{money(p.prizeAdj)}</div>
                         )}
@@ -2715,6 +2863,26 @@ for update to anon using (true) with check (true);`}
                       <span className="muted">Buy-in value</span>
                       <span>{money(p.buyInCash)} · {p.buyInChips.toLocaleString()} chips</span>
                     </div>
+                    {computed.isCashMode && (
+                      <div className="mobile-player-row">
+                        <span className="muted">Payment status</span>
+                        {(() => {
+                          const entries = normalizeBuyInEntries(p.buyInEntries, p.buyIns, computed.cashPerBuyIn);
+                          const hasEntries = entries.length > 0;
+                          const allPaid = hasEntries && entries.every((e) => !!e.paid);
+                          return (
+                            <button
+                              type="button"
+                              className={`buyin-status-toggle ${allPaid ? "is-paid" : "is-unpaid"}`}
+                              disabled={!hasEntries}
+                              onClick={() => setPlayerBuyInPaidStatus(p.id, !allPaid)}
+                            >
+                              {allPaid ? "Paid ✓" : "Unpaid"}
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    )}
                     <div className="mobile-player-row">
                       <span className="muted">{computed.isCashMode ? "Final chips" : "Cash-out"}</span>
                       <input
@@ -2766,149 +2934,22 @@ for update to anon using (true) with check (true);`}
         {tab === "debts" && (
           <section className="panel">
             <h3>Outstanding Debts</h3>
-            <div className="muted small" style={{ marginBottom: 10 }}>
-              Debts are based on Net No Prize only. Grouped by session and tracked by player.
-            </div>
-            {outstandingNoPrize.length === 0 ? (
-              <div className="muted">No outstanding debts.</div>
+            {db.live?.mode !== "cash" ? (
+              <div className="muted">Buy-in debt tracking is available only in Cash Game mode.</div>
+            ) : buyInDebtSummary.debts.length === 0 ? (
+              <div className="muted">No unpaid buy-ins.</div>
             ) : (
-              <></>
-            )}
-            {playerDebtTrackers.length > 0 && (
-              <div className="player-tracker-wrap">
-                <div className="history-group-title">Player Debt Tracker</div>
-                <div className="player-tracker-list">
-                  {playerDebtTrackers.map((p) => {
-                    const isOpen = !!playerDebtOpen[p.player];
-                    return (
-                      <article key={`tracker-${p.player}`} className="player-tracker-card">
-                        <button
-                          className="player-tracker-head"
-                          onClick={() =>
-                            setPlayerDebtOpen((s) => ({ ...s, [p.player]: !s[p.player] }))
-                          }
-                        >
-                          <div>
-                            <strong>{p.player}</strong>
-                            <div className="muted small">
-                              Owes {money(p.totalOwes)} · Owed {money(p.totalOwed)}
-                            </div>
-                          </div>
-                          <div className="debt-group-right">
-                            <span className={p.net >= 0 ? "pos" : "neg"}>
-                              Net {p.net >= 0 ? "+" : ""}{money(p.net)}
-                            </span>
-                            <span className="muted">{isOpen ? "Hide" : "View"}</span>
-                          </div>
-                        </button>
-                        {isOpen && (
-                          <div className="player-tracker-body">
-                            <div className="history-table-wrap">
-                              <table className="history-subtable history-summary-table">
-                                <thead>
-                                  <tr>
-                                    <th>Session</th>
-                                    <th>They Owe</th>
-                                    <th>Owed By</th>
-                                    <th>Session Owes</th>
-                                    <th>Session Owed</th>
-                                    <th>Session Net</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {p.sessions.map((s) => {
-                                    const sessionNet = round2(s.owedTotal - s.owesTotal);
-                                    return (
-                                      <tr key={`${p.player}-${s.sessionId}`}>
-                                        <td>{new Date(s.stamp).toLocaleString()}</td>
-                                        <td>
-                                          {s.owesTo.length
-                                            ? s.owesTo.map((x) => `${x.name} ${money(x.amount)}`).join(", ")
-                                            : "-"}
-                                        </td>
-                                        <td>
-                                          {s.owedBy.length
-                                            ? s.owedBy.map((x) => `${x.name} ${money(x.amount)}`).join(", ")
-                                            : "-"}
-                                        </td>
-                                        <td>{money(s.owesTotal)}</td>
-                                        <td>{money(s.owedTotal)}</td>
-                                        <td className={sessionNet >= 0 ? "pos" : "neg"}>
-                                          {sessionNet >= 0 ? "+" : ""}{money(sessionNet)}
-                                        </td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            <div className="player-tracker-wrap">
-              <div className="history-group-title">Prize Money Debts</div>
-              <div className="muted small" style={{ marginBottom: 8 }}>
-                Prize deductions owed to winner(s). Mark each transfer as paid or unpaid.
-              </div>
-              {prizePaymentRows.length === 0 ? (
-                <div className="muted">No prize money debts found.</div>
-              ) : (
-                <>
-                  {prizeDebtByPlayer.length > 0 ? (
-                    <div className="player-tracker-list" style={{ marginBottom: 10 }}>
-                      {prizeDebtByPlayer.map((p) => (
-                        <div key={`prize-net-${p.name}`} className="debt-summary-row">
-                          <strong>{p.name}</strong>
-                          <span className={round2(p.totalOwedBy - p.totalOwes) >= 0 ? "pos" : "neg"}>
-                            {round2(p.totalOwedBy - p.totalOwes) >= 0 ? "+" : ""}
-                            {money(round2(p.totalOwedBy - p.totalOwes))}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div className="history-table-wrap">
-                    <table className="history-subtable history-prize-transfer-table">
-                      <thead>
-                        <tr>
-                          <th>Session</th>
-                          <th>From</th>
-                          <th>To</th>
-                          <th>Amount</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {prizePaymentRows.map((r) => (
-                          <tr key={`${r.sessionId}-${r.paymentId}`}>
-                            <td>{new Date(r.sessionStamp).toLocaleString()}</td>
-                            <td>{r.from}</td>
-                            <td>{r.to}</td>
-                            <td>{money(r.amount)}</td>
-                            <td>
-                              <select
-                                value={r.paid ? "paid" : "unpaid"}
-                                onChange={(e) =>
-                                  setPrizePaymentStatus(r.sessionId, r.paymentId, e.target.value === "paid")
-                                }
-                              >
-                                <option value="unpaid">Unpaid</option>
-                                <option value="paid">Paid</option>
-                              </select>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              <div className="debt-live-list">
+                {buyInDebtSummary.debts.map((d) => (
+                  <div key={`${d.playerId}-${d.potHolderId}`} className="tx-item">
+                    <strong>{d.playerName}</strong>
+                    <span> owes </span>
+                    <strong>{d.potHolderName}</strong>
+                    <span> {money(d.amount)}</span>
                   </div>
-                </>
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
@@ -2990,6 +3031,16 @@ for update to anon using (true) with check (true);`}
                                   typeof p.baseNetCash === "number"
                                     ? p.baseNetCash
                                     : round2((p.netCash || 0) - (p.prizeAdj || 0));
+                                const buyInEntries = normalizeBuyInEntries(
+                                  p.buyInEntries,
+                                  p.buyIns,
+                                  Number(settings.buyInCashAmount || 0)
+                                );
+                                const unpaidBuyIn = round2(
+                                  buyInEntries
+                                    .filter((e) => !e.paid)
+                                    .reduce((sum, e) => sum + round2(Number(e.amount) || 0), 0)
+                                );
                                 return (
                                   <>
                               <td>
@@ -3005,6 +3056,12 @@ for update to anon using (true) with check (true);`}
                                     {isLinkedPlayer(p) ? "Linked" : "Guest"}
                                   </span>
                                 </div>
+                                {Array.isArray(p.buyInEntries) && buyInEntries.length > 0 ? (
+                                  <div className="muted small">
+                                    Buy-ins paid: {buyInEntries.filter((e) => e.paid).length}/{buyInEntries.length}
+                                    {unpaidBuyIn > 0 ? ` · Unpaid ${money(unpaidBuyIn)}` : ""}
+                                  </div>
+                                ) : null}
                               </td>
                               <td>{p.buyIns}</td>
                               <td>{money(p.cashOut)}</td>
