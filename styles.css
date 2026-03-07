@@ -373,12 +373,16 @@ pre { overflow-x: auto; max-width: 100%; }
   gap: 8px;
   margin-bottom: 8px;
 }
-.summary-table-wrap { overflow-x: auto; }
+.summary-table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
 .summary-table {
-  min-width: 100%;
-  width: 100%;
+  min-width: 720px;
+  width: max-content;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
 }
 .summary-table th,
 .summary-table td {
@@ -389,14 +393,17 @@ pre { overflow-x: auto; max-width: 100%; }
   white-space: nowrap;
 }
 .summary-table th {
+  white-space: nowrap;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-size: 11px;
 }
+.summary-table td {
+  white-space: nowrap;
+}
 .summary-table .player-column {
-  width: 40% !important;
-  min-width: 140px;
+  min-width: 160px;
   text-align: left;
 }
 td.player-column {
@@ -423,6 +430,11 @@ td.player-column {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.summary-player-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .badge,
 .summary-player-badge {
@@ -920,7 +932,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .mobile-player-row .muted { font-size: 12px; }
   .table-panel { overflow: visible; }
   table { min-width: 100%; width: 100%; }
-  .summary-table { min-width: 100%; table-layout: fixed; width: 100%; }
+  .summary-table { min-width: 720px; table-layout: auto; width: max-content; }
   .history-summary-table,
   .history-transfer-table,
   .history-prize-transfer-table {
@@ -953,17 +965,11 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
     padding: 6px 6px;
     line-height: 1.25;
   }
-  .summary-table .player-column {
-    width: 40%;
-  }
+  .summary-table .player-column { min-width: 160px; }
   .summary-table td:nth-child(n+2),
   .summary-table th:nth-child(n+2) {
     padding-left: 5px;
     padding-right: 5px;
-  }
-  .summary-table th:not(.player-column),
-  .summary-table td:not(.player-column) {
-    width: 12%;
   }
   .history-head strong { font-size: 13px; }
   .history-meta { font-size: 11px; }
