@@ -374,13 +374,14 @@ pre { overflow-x: auto; max-width: 100%; }
   margin-bottom: 8px;
 }
 .summary-table-wrap {
+  max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
 }
 .summary-table {
   min-width: 720px;
-  width: max-content;
+  width: 100%;
   border-collapse: collapse;
   table-layout: auto;
 }
@@ -932,7 +933,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .mobile-player-row .muted { font-size: 12px; }
   .table-panel { overflow: visible; }
   table { min-width: 100%; width: 100%; }
-  .summary-table { min-width: 720px; table-layout: auto; width: max-content; }
+  .summary-table { min-width: 720px; table-layout: auto; width: 100%; }
   .history-summary-table,
   .history-transfer-table,
   .history-prize-transfer-table {
