@@ -375,7 +375,7 @@ pre { overflow-x: auto; max-width: 100%; }
 }
 .summary-table-wrap { overflow-x: auto; }
 .summary-table {
-  min-width: 100%;
+  min-width: 760px;
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
@@ -398,6 +398,8 @@ pre { overflow-x: auto; max-width: 100%; }
   padding-top: 12px;
   padding-bottom: 12px;
   font-weight: 600;
+  white-space: normal;
+  line-height: 1.2;
 }
 .summary-table tbody tr {
   height: 44px;
@@ -935,7 +937,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .mobile-player-row .muted { font-size: 12px; }
   .table-panel { overflow: visible; }
   table { min-width: 100%; width: 100%; }
-  .summary-table { min-width: 100%; table-layout: fixed; width: 100%; }
+  .summary-table { min-width: 760px; table-layout: fixed; width: 100%; }
   .history-summary-table,
   .history-transfer-table,
   .history-prize-transfer-table {
@@ -967,6 +969,11 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
     font-size: 11px;
     padding: 8px 10px;
     line-height: 1.25;
+  }
+  .summary-table thead th {
+    white-space: normal;
+    font-size: 10.5px;
+    line-height: 1.15;
   }
   .summary-table .player-column {
     width: 45%;
