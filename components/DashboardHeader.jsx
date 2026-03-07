@@ -60,7 +60,7 @@ export function SessionHeader({
   );
 }
 
-export function StatsHero({ loading = false, potCash, chips, difference, compact = false }) {
+export function StatsHero({ loading = false, potCash, chips, difference, compact = false, modeLabel = "" }) {
   const cells = [
     { label: "POT (Cash)", value: potCash, tone: "text-emerald-50" },
     { label: "CHIPS", value: chips, tone: "text-emerald-50" },
@@ -92,6 +92,13 @@ export function StatsHero({ loading = false, potCash, chips, difference, compact
           </div>
         ))}
       </div>
+      {modeLabel ? (
+        <div className="mt-2">
+          <span className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-emerald-100 ring-1 ring-white/15">
+            {modeLabel}
+          </span>
+        </div>
+      ) : null}
     </section>
   );
 }

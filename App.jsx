@@ -1991,6 +1991,7 @@ function MainApp() {
             chips={Math.round(animatedChips).toLocaleString()}
             difference={money(animatedDiff)}
             compact={statsCompact}
+            modeLabel={db.live?.mode === "cash" ? "CASH GAME MODE" : "TOURNAMENT MODE"}
           />
         </div>
 
