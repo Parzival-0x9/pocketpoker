@@ -74,7 +74,7 @@ export function StatsHero({ loading = false, potCash, chips, difference, compact
   return (
     <section
       className={cn(
-        "stats-hero-inner rounded-2xl bg-emerald-950/60 px-4 py-3 ring-1 ring-white/10 backdrop-blur-sm",
+        "stats-hero-inner header-top rounded-2xl bg-emerald-950/60 px-4 py-3 ring-1 ring-white/10 backdrop-blur-sm",
         compact ? "is-compact" : ""
       )}
     >
@@ -94,7 +94,7 @@ export function StatsHero({ loading = false, potCash, chips, difference, compact
       </div>
       {modeLabel ? (
         <div className="mt-2">
-          <span className="inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-emerald-100 ring-1 ring-white/15">
+          <span className="mode-badge inline-flex items-center rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-emerald-100 ring-1 ring-white/15">
             {modeLabel}
           </span>
         </div>
@@ -179,8 +179,8 @@ export function QuickActionsTop({ onAddPlayer, onLoadLineup }) {
 
 export function PrimaryNavTabs({ tabs, activeTab, onChange }) {
   return (
-    <nav className="sticky top-[calc(env(safe-area-inset-top)+58px)] z-17 rounded-2xl bg-emerald-950/75 p-1.5 ring-1 ring-white/10 backdrop-blur-md">
-      <div className="grid grid-cols-5 gap-1">
+    <nav className="nav-tabs sticky z-17 rounded-2xl bg-emerald-950/75 p-1.5 ring-1 ring-white/10 backdrop-blur-md">
+      <div className="nav-tabs-row grid grid-cols-5 gap-1">
         {tabs.map((tab) => {
           const active = activeTab === tab.key;
           return (

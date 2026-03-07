@@ -167,6 +167,35 @@ input, select {
   top: calc(env(safe-area-inset-top) + 2px);
   z-index: 30;
   transition: top 180ms ease-out;
+  height: auto;
+  overflow: visible;
+}
+.header-top {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: auto;
+  overflow: visible;
+}
+.mode-badge {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.nav-tabs {
+  top: calc(env(safe-area-inset-top) + 58px);
+}
+.nav-tabs-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.nav-tabs-row::-webkit-scrollbar { display: none; }
+.nav-tabs-row button {
+  flex: 0 0 auto;
+  min-width: 88px;
 }
 .stats-hero-wrap .stats-hero-inner {
   transition:
@@ -955,7 +984,10 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .stats-hero-wrap.is-sticky .stats-hero-inner {
     padding-left: 12px;
     padding-right: 12px;
-    min-height: 54px;
+    min-height: auto;
+  }
+  .nav-tabs {
+    top: calc(env(safe-area-inset-top) + 90px);
   }
   .metric-leader { display: none; }
   .cards-grid::-webkit-scrollbar { display: none; }
