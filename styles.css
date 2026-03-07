@@ -373,40 +373,44 @@ pre { overflow-x: auto; max-width: 100%; }
   gap: 8px;
   margin-bottom: 8px;
 }
-.summary-table-wrap { overflow-x: auto; }
+.summary-table-wrap {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
 .summary-table {
-  min-width: 100%;
-  width: 100%;
+  min-width: 640px;
+  width: max-content;
   border-collapse: collapse;
-  table-layout: fixed;
+  table-layout: auto;
 }
 .summary-table th,
 .summary-table td {
-  padding: 10px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 13px;
   line-height: 1.4;
   white-space: nowrap;
 }
 .summary-table th {
+  white-space: nowrap;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-size: 11px;
 }
 .summary-table .player-column {
-  width: 40% !important;
   min-width: 140px;
   text-align: left;
 }
 td.player-column {
-  padding: 8px;
+  padding: 10px 12px;
   vertical-align: middle;
 }
 .summary-table td:nth-child(n+2),
 .summary-table th:nth-child(n+2) {
-  padding-left: 8px;
-  padding-right: 8px;
+  padding-left: 12px;
+  padding-right: 12px;
 }
 .player-cell,
 .summary-player-cell {
@@ -920,7 +924,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .mobile-player-row .muted { font-size: 12px; }
   .table-panel { overflow: visible; }
   table { min-width: 100%; width: 100%; }
-  .summary-table { min-width: 100%; table-layout: fixed; width: 100%; }
+  .summary-table { min-width: 640px; table-layout: auto; width: max-content; }
   .history-summary-table,
   .history-transfer-table,
   .history-prize-transfer-table {
@@ -950,20 +954,13 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
     white-space: nowrap;
     word-break: normal;
     font-size: 11px;
-    padding: 6px 6px;
+    padding: 10px 12px;
     line-height: 1.25;
-  }
-  .summary-table .player-column {
-    width: 40%;
   }
   .summary-table td:nth-child(n+2),
   .summary-table th:nth-child(n+2) {
-    padding-left: 5px;
-    padding-right: 5px;
-  }
-  .summary-table th:not(.player-column),
-  .summary-table td:not(.player-column) {
-    width: 12%;
+    padding-left: 12px;
+    padding-right: 12px;
   }
   .history-head strong { font-size: 13px; }
   .history-meta { font-size: 11px; }
