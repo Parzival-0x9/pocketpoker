@@ -2534,62 +2534,64 @@ for update to anon using (true) with check (true);`}
             </section>
 
             <section className="panel session-summary-panel">
-              <div className="session-summary-head">
+              <div className={`session-summary-head ${computed.isCashMode ? "cash-mode" : "tournament-mode"}`}>
                 <h3>Game Summary</h3>
                 <span className="muted small">
                   {computed.isCashMode ? "Buy-ins vs final payouts reference" : "Buy-ins vs cash-outs reference"}
                 </span>
               </div>
-              <div className="summary-table-wrap">
-                <table className="summary-table">
-                  <thead>
-                    <tr>
-                      <th className="player-column">Player</th>
-                      <th>Buy-ins</th>
-                      <th>Cash-out</th>
-                      <th>{computed.isCashMode ? "Profit/Loss" : "Net (No Prize)"}</th>
-                      {computed.isCashMode ? null : <th>Prize Adj</th>}
-                      {computed.isCashMode ? null : <th>Net (With Prize)</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {computed.players.map((p) => (
-                      <tr key={`sum-${p.id}`}>
-                        <td className="player-column">
-                          <div
-                            className="player-cell summary-player-cell"
-                            style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}
-                          >
-                            <span
-                              className="player-name summary-player-name"
-                              title={p.label}
-                              style={{
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                flex: 1,
-                                minWidth: 0,
-                              }}
-                            >
-                              {p.label}
-                            </span>
-                          </div>
-                        </td>
-                        <td>{p.buyIns}</td>
-                        <td>{money(p.cashOut)}</td>
-                        <td className={p.baseNetCash >= 0 ? "pos" : "neg"}>
-                          {money(p.baseNetCash)}
-                        </td>
-                        {computed.isCashMode ? null : (
-                          <td className={p.prizeAdj >= 0 ? "pos" : "neg"}>
-                            {p.prizeAdj >= 0 ? "+" : ""}{money(p.prizeAdj)}
-                          </td>
-                        )}
-                        {computed.isCashMode ? null : <td className={p.netCash >= 0 ? "pos" : "neg"}>{money(p.netCash)}</td>}
+              <div className={computed.isCashMode ? "" : "summary-table-scroll"}>
+                <div className="summary-table-wrap">
+                  <table className="summary-table">
+                    <thead>
+                      <tr>
+                        <th className="player-column">Player</th>
+                        <th>Buy-ins</th>
+                        <th>Cash-out</th>
+                        <th>{computed.isCashMode ? "Profit/Loss" : "Net (No Prize)"}</th>
+                        {computed.isCashMode ? null : <th>Prize Adj</th>}
+                        {computed.isCashMode ? null : <th>Net (With Prize)</th>}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {computed.players.map((p) => (
+                        <tr key={`sum-${p.id}`}>
+                          <td className="player-column">
+                            <div
+                              className="player-cell summary-player-cell"
+                              style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", minWidth: 0 }}
+                            >
+                              <span
+                                className="player-name summary-player-name"
+                                title={p.label}
+                                style={{
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  flex: 1,
+                                  minWidth: 0,
+                                }}
+                              >
+                                {p.label}
+                              </span>
+                            </div>
+                          </td>
+                          <td>{p.buyIns}</td>
+                          <td>{money(p.cashOut)}</td>
+                          <td className={p.baseNetCash >= 0 ? "pos" : "neg"}>
+                            {money(p.baseNetCash)}
+                          </td>
+                          {computed.isCashMode ? null : (
+                            <td className={p.prizeAdj >= 0 ? "pos" : "neg"}>
+                              {p.prizeAdj >= 0 ? "+" : ""}{money(p.prizeAdj)}
+                            </td>
+                          )}
+                          {computed.isCashMode ? null : <td className={p.netCash >= 0 ? "pos" : "neg"}>{money(p.netCash)}</td>}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </section>
 

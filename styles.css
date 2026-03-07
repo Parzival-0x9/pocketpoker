@@ -398,6 +398,20 @@ pre { overflow-x: auto; max-width: 100%; }
   align-self: center;
   color: var(--muted);
 }
+.session-summary-head.cash-mode::after {
+  content: "";
+}
+.summary-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.summary-table-scroll .summary-table {
+  min-width: 720px;
+}
+.summary-table-scroll .summary-table th,
+.summary-table-scroll .summary-table td {
+  white-space: nowrap;
+}
 .summary-table-wrap {
   max-width: 100%;
   overflow: visible;
