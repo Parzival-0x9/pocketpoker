@@ -2114,7 +2114,7 @@ function MainApp() {
                 </label>
                 <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 sm:col-span-2">
                   <div className="text-xs uppercase tracking-wide text-emerald-300/60">Game Mode</div>
-                  <div className="flex flex-wrap items-center gap-4 text-sm text-emerald-100">
+                  <div className="game-mode-options text-sm text-emerald-100">
                     <label className="inline-flex items-center gap-2 text-emerald-100">
                       <input
                         type="radio"
