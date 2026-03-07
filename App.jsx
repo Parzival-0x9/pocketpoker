@@ -106,7 +106,16 @@ function isLinkedPlayer(ref) {
   return true;
 }
 
+function resolvePotHolderPlayerId(players, potHolderPlayerId) {
+  const rows = Array.isArray(players) ? players : [];
+  if (!rows.length) return "";
+  const candidate = String(potHolderPlayerId || "");
+  if (candidate && rows.some((p) => playerRefId(p, p?.id || "") === candidate)) return candidate;
+  return playerRefId(rows[0], rows[0]?.id || "");
+}
+
 function defaultDB() {
+  const players = [blankPlayer(), blankPlayer()];
   return {
     rev: 0,
     users: [],
@@ -121,7 +130,8 @@ function defaultDB() {
       buyInChipStack: 50,
       prizeEnabled: true,
       prizePerPlayer: 20,
-      players: [blankPlayer(), blankPlayer()],
+      players,
+      potHolderPlayerId: resolvePotHolderPlayerId(players, ""),
       updatedAt: new Date().toISOString(),
       updatedBy: null,
     },
@@ -135,6 +145,10 @@ function loadDB() {
     const raw = localStorage.getItem(DB_KEY);
     if (!raw) return defaultDB();
     const parsed = JSON.parse(raw);
+    const players =
+      Array.isArray(parsed?.live?.players) && parsed.live.players.length
+        ? parsed.live.players.map((p) => normalizeLivePlayer(p))
+        : [blankPlayer(), blankPlayer()];
     return {
       ...defaultDB(),
       ...parsed,
@@ -145,10 +159,8 @@ function loadDB() {
         mode: parsed?.live?.mode === "cash" ? "cash" : "tournament",
         prizeEnabled: typeof parsed?.live?.prizeEnabled === "boolean" ? parsed.live.prizeEnabled : true,
         prizePerPlayer: Math.max(0, Number(parsed?.live?.prizePerPlayer || 20)),
-        players:
-          Array.isArray(parsed?.live?.players) && parsed.live.players.length
-            ? parsed.live.players.map((p) => normalizeLivePlayer(p))
-            : [blankPlayer(), blankPlayer()],
+        players,
+        potHolderPlayerId: resolvePotHolderPlayerId(players, parsed?.live?.potHolderPlayerId),
       },
       users: normalizeUsers(parsed.users),
       presence:
@@ -337,14 +349,19 @@ function csvPayloadToDb(csvText) {
       : [],
     adminEvents: Array.isArray(parts.adminEvents) ? parts.adminEvents : [],
     history: Array.isArray(parts.history) ? parts.history : [],
-    live: {
-      ...defaultDB().live,
-      ...(parts.live || {}),
-      mode: parts?.live?.mode === "cash" ? "cash" : "tournament",
-      players: Array.isArray(parts?.live?.players) && parts.live.players.length
-        ? parts.live.players.map((p) => normalizeLivePlayer(p))
-        : [blankPlayer(), blankPlayer()],
-    },
+    live: (() => {
+      const players =
+        Array.isArray(parts?.live?.players) && parts.live.players.length
+          ? parts.live.players.map((p) => normalizeLivePlayer(p))
+          : [blankPlayer(), blankPlayer()];
+      return {
+        ...defaultDB().live,
+        ...(parts.live || {}),
+        mode: parts?.live?.mode === "cash" ? "cash" : "tournament",
+        players,
+        potHolderPlayerId: resolvePotHolderPlayerId(players, parts?.live?.potHolderPlayerId),
+      };
+    })(),
   };
 
   return {
@@ -494,6 +511,56 @@ function settleEqualSplitCapped(rows) {
   }));
 }
 
+function settleViaPotHolder(rows, potHolderPlayerId) {
+  const holderId = resolvePotHolderPlayerId(rows, potHolderPlayerId);
+  if (!holderId) return [];
+  const holder = rows.find((p) => playerRefId(p, p?.id || "") === holderId);
+  if (!holder) return [];
+
+  const txns = [];
+  rows.forEach((p) => {
+    const pid = playerRefId(p, p?.id || "");
+    if (!pid || pid === holderId) return;
+    const net = round2(Number(p.net) || 0);
+    if (net < -0.0001) {
+      txns.push({
+        id: null,
+        from: safeName(p.name),
+        fromId: pid,
+        to: safeName(holder.name),
+        toId: holderId,
+        amount: round2(-net),
+        paid: false,
+        paidAt: null,
+        method: null,
+      });
+    }
+  });
+  rows.forEach((p) => {
+    const pid = playerRefId(p, p?.id || "");
+    if (!pid || pid === holderId) return;
+    const net = round2(Number(p.net) || 0);
+    if (net > 0.0001) {
+      txns.push({
+        id: null,
+        from: safeName(holder.name),
+        fromId: holderId,
+        to: safeName(p.name),
+        toId: pid,
+        amount: net,
+        paid: false,
+        paidAt: null,
+        method: null,
+      });
+    }
+  });
+
+  return txns.map((t, i) => ({
+    ...t,
+    id: `${t.fromId || t.from}|${t.toId || t.to}|${t.amount}|holder|${i}`,
+  }));
+}
+
 function computeSession(live) {
   const cashPerBuyIn = Math.max(1, Number(live.buyInCashAmount) || 50);
   const chipsPerBuyIn = Math.max(1, Number(live.buyInChipStack) || 50);
@@ -573,11 +640,20 @@ function computeSession(live) {
   const txnsWithPrize = settleEqualSplitCapped(
     players.map((p) => ({ name: p.label, playerId: playerRefId(p, p.id || ""), net: p.netCash }))
   );
+  const potHolderPlayerId = resolvePotHolderPlayerId(players, live?.potHolderPlayerId);
+  const potHolderPlayer = players.find((p) => playerRefId(p, p.id || "") === potHolderPlayerId) || null;
+  const txnsCashPotHolder = settleViaPotHolder(
+    players.map((p) => ({ name: p.label, playerId: playerRefId(p, p.id || ""), net: p.baseNetCash })),
+    potHolderPlayerId
+  );
+  const liveSettlementTxns = isCashMode ? txnsCashPotHolder : txnsWithPrize;
 
   return {
     players,
     txnsNoPrize,
     txnsWithPrize,
+    txnsCashPotHolder,
+    liveSettlementTxns,
     potCash,
     potChips,
     cashOutTotal,
@@ -594,6 +670,8 @@ function computeSession(live) {
     winnerNames,
     winnerIds,
     winnerPayoutEach,
+    potHolderPlayerId,
+    potHolderName: safeName(potHolderPlayer?.label || potHolderPlayer?.name || ""),
   };
 }
 
@@ -1293,7 +1371,12 @@ function MainApp() {
   }, [currentUser, db?.live?.buyInChipStack]);
 
   function updateLive(fn) {
-    const nextLive = fn({ ...(db.live || defaultDB().live) });
+    const nextLiveRaw = fn({ ...(db.live || defaultDB().live) });
+    const normalizedPlayers = Array.isArray(nextLiveRaw?.players) ? nextLiveRaw.players : [];
+    const nextLive = {
+      ...nextLiveRaw,
+      potHolderPlayerId: resolvePotHolderPlayerId(normalizedPlayers, nextLiveRaw?.potHolderPlayerId),
+    };
     commit({
       ...db,
       live: {
@@ -1448,6 +1531,13 @@ function MainApp() {
     updateLive((live) => ({
       ...live,
       mode: v === "cash" ? "cash" : "tournament",
+    }));
+  }
+
+  function setPotHolderPlayerId(v) {
+    updateLive((live) => ({
+      ...live,
+      potHolderPlayerId: String(v || ""),
     }));
   }
 
@@ -1660,6 +1750,10 @@ function MainApp() {
           name: nextName,
         };
       }),
+      potHolderPlayerId:
+        String(db.live?.potHolderPlayerId || "") === sourceId
+          ? targetId
+          : db.live?.potHolderPlayerId || "",
     };
 
     commit({
@@ -2004,6 +2098,26 @@ function MainApp() {
             modeLabel={db.live?.mode === "cash" ? "CASH GAME MODE" : "TOURNAMENT MODE"}
           />
         </div>
+        {tab === "live" && db.live?.mode === "cash" && (
+          <section className="pot-holder-strip">
+            <label className="pot-holder-label" htmlFor="pot-holder-select">Pot Holder</label>
+            <select
+              id="pot-holder-select"
+              className="pot-holder-select"
+              value={computed.potHolderPlayerId || ""}
+              onChange={(e) => setPotHolderPlayerId(e.target.value)}
+            >
+              {computed.players.map((p) => {
+                const pid = playerRefId(p, p.id || "");
+                return (
+                  <option key={`holder-${pid}`} value={pid}>
+                    {p.label}
+                  </option>
+                );
+              })}
+            </select>
+          </section>
+        )}
 
         <section className="space-y-4">
           <SyncStatusInline
@@ -2103,25 +2217,29 @@ function MainApp() {
                     onChange={(e) => setChipStack(e.target.value)}
                   />
                 </label>
-                <label className="space-y-2">
-                  <span className="text-xs uppercase tracking-wide text-emerald-300/60">Prize per player (AUD)</span>
-                  <input
-                    className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={db.live.prizePerPlayer}
-                    onChange={(e) => setPrizePerPlayer(e.target.value)}
-                  />
-                </label>
-                <label className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-                  <span className="text-xs uppercase tracking-wide text-emerald-300/60">Prize mechanic enabled</span>
-                  <input
-                    type="checkbox"
-                    checked={!!db.live.prizeEnabled}
-                    onChange={(e) => setPrizeEnabled(e.target.checked)}
-                  />
-                </label>
+                {db.live?.mode === "tournament" && (
+                  <>
+                    <label className="space-y-2">
+                      <span className="text-xs uppercase tracking-wide text-emerald-300/60">Prize per player (AUD)</span>
+                      <input
+                        className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={db.live.prizePerPlayer}
+                        onChange={(e) => setPrizePerPlayer(e.target.value)}
+                      />
+                    </label>
+                    <label className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                      <span className="text-xs uppercase tracking-wide text-emerald-300/60">Prize mechanic enabled</span>
+                      <input
+                        type="checkbox"
+                        checked={!!db.live.prizeEnabled}
+                        onChange={(e) => setPrizeEnabled(e.target.checked)}
+                      />
+                    </label>
+                  </>
+                )}
                 <div className="space-y-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 sm:col-span-2">
                   <div className="text-xs uppercase tracking-wide text-emerald-300/60">Game Mode</div>
                   <div className="game-mode-toggle">
@@ -2614,11 +2732,11 @@ for update to anon using (true) with check (true);`}
 
             <section className="panel">
               <h3>Live Settlement Preview</h3>
-              {computed.txnsWithPrize.length === 0 ? (
+              {computed.liveSettlementTxns.length === 0 ? (
                 <div className="muted">No transfers required right now.</div>
               ) : (
                 <div className="tx-grid">
-                  {computed.txnsWithPrize.map((t) => (
+                  {computed.liveSettlementTxns.map((t) => (
                     <div key={t.id} className="tx-item">
                       <strong>{t.from}</strong>
                       <span> pays </span>
