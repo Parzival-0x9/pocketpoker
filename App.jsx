@@ -1271,6 +1271,8 @@ function MainApp() {
           if (cancelled) return;
           setSyncState("error");
           setSyncError(String(err?.message || err || "Database sync refresh failed"));
+          setPendingCloudWrite(false);
+          setSyncNote("Using local session only");
         } finally {
           isRefreshing = false;
         }
@@ -1303,6 +1305,8 @@ function MainApp() {
           if (cancelled) return;
           setSyncState("error");
           setSyncError(String(err?.message || err || "Database sync failed"));
+          setPendingCloudWrite(false);
+          setSyncNote("Using local session only");
         } finally {
           if (!cancelled) setSyncBootstrapped(true);
         }
@@ -1322,6 +1326,8 @@ function MainApp() {
           if (cancelled) return;
           setSyncState("error");
           setSyncError(String(err?.message || err || "Database poll failed"));
+          setPendingCloudWrite(false);
+          setSyncNote("Using local session only");
         }
       }, 4000);
 
@@ -1386,11 +1392,14 @@ function MainApp() {
           setSyncState("connected");
           setSyncError("");
           setPendingCloudWrite(false);
+          setSyncNote("");
           setLastSyncAt(new Date().toISOString());
         })
         .catch((err) => {
           setSyncState("error");
           setSyncError(String(err?.message || err || "Database write failed"));
+          setPendingCloudWrite(false);
+          setSyncNote("Using local session only");
         });
     }
   }
@@ -1430,6 +1439,8 @@ function MainApp() {
     } catch (err) {
       setSyncState("error");
       setSyncError(String(err?.message || err || "Manual sync failed"));
+      setPendingCloudWrite(false);
+      setSyncNote("Using local session only");
     } finally {
       setManualSyncBusy(false);
     }
@@ -2193,7 +2204,7 @@ function MainApp() {
         : syncState === "connecting"
           ? "Syncing..."
           : syncState === "error"
-            ? "Sync issue"
+            ? "Cloud sync unavailable"
             : "Local only";
   const syncStatusTone =
     syncState === "error" ? "error" : syncState === "connected" && !syncHeartbeatStale && !syncPending ? "connected" : "muted";
@@ -2435,6 +2446,12 @@ function MainApp() {
                     : syncState}
                 </span>
               </div>
+              {syncState === "error" ? (
+                <div className="mt-2 text-xs text-amber-200/90">
+                  <div>Cloud sync unavailable</div>
+                  <div>Using local session only</div>
+                </div>
+              ) : null}
               {syncError ? <div className="mt-2 text-xs text-red-300">{syncError}</div> : null}
               {syncState === "error" && String(syncError || "").toLowerCase().includes("row-level security") ? (
                 <div className="mt-3 space-y-2">
