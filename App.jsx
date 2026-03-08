@@ -1528,11 +1528,17 @@ function MainApp() {
       if (!incomingLive || typeof incomingLive !== "object") return;
       const preferIncoming = !!options.preferIncoming;
       setDB((prev) => {
+        const prevLive = prev?.live || defaultDB().live;
+        const incomingLiveWithoutSettings = { ...incomingLive };
+        LIVE_SETTINGS_KEYS.forEach((key) => {
+          delete incomingLiveWithoutSettings[key];
+        });
         const mergedIncoming = {
           ...prev,
           live: {
-            ...(prev?.live || defaultDB().live),
-            ...incomingLive,
+            ...prevLive,
+            ...incomingLiveWithoutSettings,
+            ...extractLiveSettings(prevLive),
           },
         };
         const next = preferIncoming ? mergedIncoming : pickNewestState(prev, mergedIncoming);
