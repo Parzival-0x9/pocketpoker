@@ -692,6 +692,10 @@ function formatDebtTypeLabel(type) {
   return safeName(String(type || "Debt").replace(/_/g, " "));
 }
 
+function normalizeModeValue(mode) {
+  return mode === "cash" ? "cash" : "tournament";
+}
+
 const LIVE_SETTINGS_KEYS = [
   "mode",
   "buyInCashAmount",
@@ -2023,7 +2027,7 @@ function MainApp() {
   const persistedOutstandingDebts = useMemo(
     () =>
       (Array.isArray(db.debts) ? db.debts : [])
-        .filter((d) => d?.type === "unpaid_buyin" && !d?.settled && Number(d?.amount || 0) > 0.0001)
+        .filter((d) => !d?.settled && Number(d?.amount || 0) > 0.0001)
         .sort(
           (a, b) =>
             String(b?.sessionDate || "").localeCompare(String(a?.sessionDate || "")) ||
@@ -2049,6 +2053,43 @@ function MainApp() {
     });
     return out;
   }, [db.debts]);
+  const historyModeBySessionId = useMemo(() => {
+    const map = new Map();
+    const debtsBySession = new Map();
+    (Array.isArray(db.debts) ? db.debts : []).forEach((d) => {
+      const sid = String(d?.sessionId || "");
+      if (!sid) return;
+      if (!debtsBySession.has(sid)) debtsBySession.set(sid, []);
+      debtsBySession.get(sid).push(d);
+    });
+    (Array.isArray(db.history) ? db.history : []).forEach((h) => {
+      const sid = String(h?.id || "");
+      const explicit = h?.mode || h?.settings?.mode;
+      if (explicit === "cash" || explicit === "tournament") {
+        map.set(sid, explicit);
+        return;
+      }
+      const debtModes = (debtsBySession.get(sid) || []).map((d) => d?.mode).filter(Boolean);
+      if (debtModes.some((m) => m === "cash")) {
+        map.set(sid, "cash");
+        return;
+      }
+      if (debtModes.some((m) => m === "tournament")) {
+        map.set(sid, "tournament");
+        return;
+      }
+      const settings = h?.settings || {};
+      const players = Array.isArray(h?.players) ? h.players : [];
+      const hasTournamentSignals =
+        settings?.prizeEnabled === true ||
+        Number(settings?.prizePerPlayer || 0) > 0 ||
+        Number(settings?.prizePool || 0) > 0 ||
+        (Array.isArray(settings?.winnerNames) && settings.winnerNames.length > 0) ||
+        players.some((p) => Math.abs(Number(p?.prizeAdj || 0)) > 0.0001);
+      map.set(sid, hasTournamentSignals ? "tournament" : "cash");
+    });
+    return map;
+  }, [db.history, db.debts]);
   const lastClear = useMemo(
     () =>
       (db.adminEvents || [])
@@ -3581,11 +3622,13 @@ for update to anon using (true) with check (true);`}
                   <div key={d.id} className="debt-card">
                     <div className="debt-card-main">
                       <div className="debt-card-title">
-                        {safeName(d.fromPlayerName || d.fromPlayerId || "Player")} owes {safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}
+                        {normalizeModeValue(d.mode) === "cash" && d.type === "unpaid_buyin"
+                          ? `${safeName(d.fromPlayerName || d.fromPlayerId || "Player")} owes ${safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}`
+                          : `${safeName(d.fromPlayerName || d.fromPlayerId || "Player")} pays ${safeName(d.toPlayerName || d.toPlayerId || "Player")}`}
                       </div>
                       <div className="debt-card-amount">{money(d.amount)}</div>
                       <div className="debt-card-meta muted">
-                        {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"} • {formatModeLabel(d.mode)} • {formatDebtTypeLabel(d.type)}
+                        {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"} • {formatModeLabel(normalizeModeValue(d.mode))} • {formatDebtTypeLabel(d.type)}
                       </div>
                     </div>
                     <div className="debt-card-actions">
@@ -3623,6 +3666,8 @@ for update to anon using (true) with check (true);`}
                     const settings = h.settings || {};
                     const totals = h.totals || {};
                     const debtSummary = debtSummaryBySessionId.get(String(h.id || "")) || null;
+                    const historyMode = normalizeModeValue(historyModeBySessionId.get(String(h.id || "")));
+                    const isCashHistory = historyMode === "cash";
                     const isOpen = historyOpen[h.id] !== false;
                     return (
                       <>
@@ -3645,7 +3690,7 @@ for update to anon using (true) with check (true);`}
                     </span>
                     <span>Pot: {money(totals.potCash || 0)}</span>
                   </div>
-                  {settings?.prizeEnabled && isOpen && (
+                  {!isCashHistory && settings?.prizeEnabled && isOpen && (
                     <div className="history-prize-line">
                       Prize: -{money(settings.prizePerPlayer || 0)} each · Pool{" "}
                       {money(settings.prizePool || 0)} · Winner{" "}
@@ -3673,9 +3718,9 @@ for update to anon using (true) with check (true);`}
                             <th>Player</th>
                             <th>Buy-ins</th>
                             <th>Cash-out</th>
-                            <th>Net (No Prize)</th>
-                            <th>Prize Adj</th>
-                            <th>Net (With Prize)</th>
+                            <th>{isCashHistory ? "Profit/Loss" : "Net (No Prize)"}</th>
+                            {isCashHistory ? null : <th>Prize Adj</th>}
+                            {isCashHistory ? null : <th>Net (With Prize)</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -3730,10 +3775,12 @@ for update to anon using (true) with check (true);`}
                               <td className={baseNet >= 0 ? "pos" : "neg"}>
                                 {money(baseNet)}
                               </td>
-                              <td className={(p.prizeAdj || 0) >= 0 ? "pos" : "neg"}>
-                                {(p.prizeAdj || 0) >= 0 ? "+" : ""}{money(p.prizeAdj || 0)}
-                              </td>
-                              <td className={p.netCash >= 0 ? "pos" : "neg"}>{money(p.netCash)}</td>
+                              {isCashHistory ? null : (
+                                <td className={(p.prizeAdj || 0) >= 0 ? "pos" : "neg"}>
+                                  {(p.prizeAdj || 0) >= 0 ? "+" : ""}{money(p.prizeAdj || 0)}
+                                </td>
+                              )}
+                              {isCashHistory ? null : <td className={p.netCash >= 0 ? "pos" : "neg"}>{money(p.netCash)}</td>}
                                   </>
                                 );
                               })()}
@@ -3751,7 +3798,7 @@ for update to anon using (true) with check (true);`}
                       return (
                         <>
                           <div className="history-transfer-mode">
-                            <div className="muted small" style={{ marginBottom: 6 }}>Net No Prize</div>
+                            <div className="muted small" style={{ marginBottom: 6 }}>{isCashHistory ? "Cash Settlements" : "Net No Prize"}</div>
                             {txnsNoPrize.length === 0 ? (
                             <div className="muted small">No transfers.</div>
                           ) : (
@@ -3781,51 +3828,53 @@ for update to anon using (true) with check (true);`}
                             </div>
                           )}
                           </div>
-                          <div className="history-transfer-mode">
-                            <div className="muted small" style={{ marginBottom: 6 }}>
-                              Net With Prize (who sends {money(settings?.prizePerPlayer || 0)} to winner)
-                            </div>
-                            {prizePayments.length === 0 ? (
-                              <div className="muted small">No prize payments.</div>
-                            ) : (
-                              <div className="history-table-wrap">
-                                <table className="history-subtable history-prize-transfer-table">
-                                  <thead>
-                                    <tr>
-                                      <th>From</th>
-                                      <th>To</th>
-                                      <th>Amount</th>
-                                      <th>Paid</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {prizePayments.map((p) => (
-                                      <tr key={`prize-${p.id}`}>
-                                        <td>{p.from}</td>
-                                        <td>{p.to}</td>
-                                        <td>{money(p.amount)}</td>
-                                        <td>
-                                          <select
-                                            value={p.paid ? "paid" : "unpaid"}
-                                            onChange={(e) =>
-                                              setPrizePaymentStatus(
-                                                h.id,
-                                                p.id,
-                                                e.target.value === "paid"
-                                              )
-                                            }
-                                          >
-                                            <option value="unpaid">Unpaid</option>
-                                            <option value="paid">Paid</option>
-                                          </select>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                          {!isCashHistory && (
+                            <div className="history-transfer-mode">
+                              <div className="muted small" style={{ marginBottom: 6 }}>
+                                Net With Prize (who sends {money(settings?.prizePerPlayer || 0)} to winner)
                               </div>
-                            )}
-                          </div>
+                              {prizePayments.length === 0 ? (
+                                <div className="muted small">No prize payments.</div>
+                              ) : (
+                                <div className="history-table-wrap">
+                                  <table className="history-subtable history-prize-transfer-table">
+                                    <thead>
+                                      <tr>
+                                        <th>From</th>
+                                        <th>To</th>
+                                        <th>Amount</th>
+                                        <th>Paid</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {prizePayments.map((p) => (
+                                        <tr key={`prize-${p.id}`}>
+                                          <td>{p.from}</td>
+                                          <td>{p.to}</td>
+                                          <td>{money(p.amount)}</td>
+                                          <td>
+                                            <select
+                                              value={p.paid ? "paid" : "unpaid"}
+                                              onChange={(e) =>
+                                                setPrizePaymentStatus(
+                                                  h.id,
+                                                  p.id,
+                                                  e.target.value === "paid"
+                                                )
+                                              }
+                                            >
+                                              <option value="unpaid">Unpaid</option>
+                                              <option value="paid">Paid</option>
+                                            </select>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </>
                       );
                     })()}
