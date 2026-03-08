@@ -1178,6 +1178,8 @@ function MainApp() {
   const [authView, setAuthView] = useState("login");
   const [playerDebtOpen, setPlayerDebtOpen] = useState({});
   const [historyOpen, setHistoryOpen] = useState({});
+  const [historyManageMode, setHistoryManageMode] = useState(false);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState([]);
   const [statsCompact, setStatsCompact] = useState(false);
   const [flashMap, setFlashMap] = useState({});
   const [activeEditPlayerId, setActiveEditPlayerId] = useState("");
@@ -1251,6 +1253,11 @@ function MainApp() {
   useEffect(() => {
     remoteLoadedRef.current = remoteLoaded;
   }, [remoteLoaded]);
+
+  useEffect(() => {
+    const validIds = new Set((Array.isArray(db.history) ? db.history : []).map((h) => String(h?.id || "")));
+    setSelectedHistoryIds((prev) => prev.filter((id) => validIds.has(String(id))));
+  }, [db.history]);
 
   useEffect(
     () => () => {
@@ -2841,6 +2848,74 @@ function MainApp() {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
+  function toggleHistorySessionSelection(sessionId, checked) {
+    const id = String(sessionId || "");
+    if (!id) return;
+    setSelectedHistoryIds((prev) => {
+      const has = prev.includes(id);
+      if (checked && !has) return [...prev, id];
+      if (!checked && has) return prev.filter((x) => x !== id);
+      return prev;
+    });
+  }
+
+  function selectAllHistorySessions() {
+    const allIds = (Array.isArray(db.history) ? db.history : [])
+      .map((h) => String(h?.id || ""))
+      .filter(Boolean);
+    setSelectedHistoryIds(allIds);
+  }
+
+  function clearHistorySelection() {
+    setSelectedHistoryIds([]);
+  }
+
+  function exportSelectedSessionReport() {
+    if (!selectedHistoryIds.length) {
+      alert("Select at least one session.");
+      return;
+    }
+    const selectedSet = new Set(selectedHistoryIds.map((id) => String(id)));
+    const selectedHistory = (Array.isArray(db.history) ? db.history : []).filter((h) =>
+      selectedSet.has(String(h?.id || ""))
+    );
+    const csv = historyToSessionReportCsv(selectedHistory);
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `classmates-session-report-selected-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
+  function deleteSelectedSessions() {
+    if (!selectedHistoryIds.length) {
+      alert("Select at least one session.");
+      return;
+    }
+    const ok = window.confirm(`Delete ${selectedHistoryIds.length} selected session(s)? This cannot be undone.`);
+    if (!ok) return;
+    const selectedSet = new Set(selectedHistoryIds.map((id) => String(id)));
+    const nextHistory = (Array.isArray(db.history) ? db.history : []).filter(
+      (h) => !selectedSet.has(String(h?.id || ""))
+    );
+    commit(
+      { ...db, history: nextHistory },
+      { cloudBucket: SYNC_STATE_KEYS.HISTORY, cloudPayload: nextHistory }
+    );
+    setSelectedHistoryIds([]);
+    setHistoryOpen((prev) => {
+      const next = { ...prev };
+      selectedSet.forEach((id) => {
+        delete next[id];
+      });
+      return next;
+    });
+  }
+
   function downloadBackupCsv(csv, label = "classmates-backup") {
     const blob = new Blob([csv], {
       type: "text/csv;charset=utf-8;",
@@ -3738,7 +3813,60 @@ for update to anon using (true) with check (true);`}
 
         {tab === "history" && (
           <section className="panel history-list">
-            <h3>Session History</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3>Session History</h3>
+              <button
+                type="button"
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                onClick={() => {
+                  setHistoryManageMode((prev) => !prev);
+                  setSelectedHistoryIds([]);
+                }}
+              >
+                {historyManageMode ? "Done" : "Manage Sessions"}
+              </button>
+            </div>
+            {historyManageMode && db.history.length > 0 ? (
+              <div className="mt-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-emerald-100"
+                    onClick={selectAllHistorySessions}
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-emerald-100"
+                    onClick={clearHistorySelection}
+                  >
+                    Clear selection
+                  </button>
+                  <span className="text-xs text-emerald-200/70">
+                    {selectedHistoryIds.length} selected
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-2.5 py-1.5 text-xs font-bold text-amber-950 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={selectedHistoryIds.length === 0}
+                    onClick={exportSelectedSessionReport}
+                  >
+                    Export Selected Report
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-red-400/40 bg-red-600/20 px-2.5 py-1.5 text-xs font-semibold text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={selectedHistoryIds.length === 0}
+                    onClick={deleteSelectedSessions}
+                  >
+                    Delete Selected Sessions
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {db.history.length === 0 ? (
               <div className="muted">No sessions saved yet.</div>
             ) : (
@@ -3751,6 +3879,18 @@ for update to anon using (true) with check (true);`}
                     if (!isOpen) setHistoryOpen((s) => ({ ...s, [h.id]: true }));
                   }}
                 >
+                  {historyManageMode ? (
+                    <div className="mb-2 flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+                      <label className="flex items-center gap-2 text-sm text-emerald-100">
+                        <input
+                          type="checkbox"
+                          checked={selectedHistoryIds.includes(String(h.id || ""))}
+                          onChange={(e) => toggleHistorySessionSelection(h.id, e.target.checked)}
+                        />
+                        Select session
+                      </label>
+                    </div>
+                  ) : null}
                   {(() => {
                     const settings = h.settings || {};
                     const totals = h.totals || {};
