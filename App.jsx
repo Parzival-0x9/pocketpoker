@@ -1207,6 +1207,25 @@ function MainApp() {
     return null;
   }
 
+  async function fetchHistoryStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS, options = {}) {
+    const allowGlobalFallback = !!options.allowGlobalFallback;
+    const history = await Promise.race([
+      fetchStateByKey(SYNC_STATE_KEYS.HISTORY),
+      new Promise((_, reject) =>
+        window.setTimeout(() => reject(new Error("Network request timed out")), ms)
+      ),
+    ]);
+    if (Array.isArray(history)) return history;
+    if (history != null) return null;
+    if (!allowGlobalFallback) return null;
+
+    const legacy = await fetchDatabaseStateWithTimeout(ms);
+    if (legacy && typeof legacy === "object" && Array.isArray(legacy.history)) {
+      return legacy.history;
+    }
+    return null;
+  }
+
   function refreshPendingCloudWriteFlag() {
     const pending = Boolean(
       cloudWriteInFlightRef.current ||
@@ -1503,9 +1522,13 @@ function MainApp() {
         }
       );
       unsubscribeHistory = subscribeStateByKey(
-        SYNC_STATE_KEYS.GLOBAL,
+        SYNC_STATE_KEYS.HISTORY,
         (incoming) => {
           if (cancelled) return;
+          if (Array.isArray(incoming)) {
+            applyIncomingHistory(incoming);
+            return;
+          }
           if (!Array.isArray(incoming?.history)) return;
           applyIncomingHistory(incoming.history);
         }
@@ -1540,10 +1563,12 @@ function MainApp() {
       })();
       (async () => {
         try {
-          const remote = await fetchDatabaseStateWithTimeout();
+          const remoteHistory = await fetchHistoryStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
+            allowGlobalFallback: true,
+          });
           if (cancelled) return;
-          if (!remote || typeof remote !== "object" || !Array.isArray(remote.history)) return;
-          applyIncomingHistory(remote.history);
+          if (!Array.isArray(remoteHistory)) return;
+          applyIncomingHistory(remoteHistory);
         } catch {}
       })();
 
@@ -1644,6 +1669,16 @@ function MainApp() {
             ? stamped.live
             : stamped;
       enqueueCloudWrite({ bucket: targetBucket, payload });
+      if (Array.isArray(options?.additionalCloudWrites)) {
+        options.additionalCloudWrites.forEach((entry) => {
+          const bucket = String(entry?.bucket || "");
+          if (!bucket) return;
+          enqueueCloudWrite({
+            bucket,
+            payload: entry?.payload,
+          });
+        });
+      }
     }
   }
 
@@ -2165,11 +2200,17 @@ function MainApp() {
           : db.live?.potHolderPlayerId || "",
     };
 
-    commit({
-      ...db,
-      live: nextLive,
-      history: nextHistory,
-    });
+    commit(
+      {
+        ...db,
+        live: nextLive,
+        history: nextHistory,
+      },
+      {
+        cloudBucket: SYNC_STATE_KEYS.LIVE,
+        additionalCloudWrites: [{ bucket: SYNC_STATE_KEYS.HISTORY, payload: nextHistory }],
+      }
+    );
     pushToast(`Merged ${source?.name || "player"} -> ${target?.name || "player"}`);
     setMergeSourcePlayerId("");
     setMergeTargetPlayerId("");
@@ -2238,21 +2279,27 @@ function MainApp() {
       autoBackups: db.autoBackups || [],
     });
 
-    commit({
-      ...db,
-      history: nextHistory,
-      live: nextLive,
-      autoBackups: [
-        {
-          id: uid(),
-          at: new Date().toISOString(),
-          by: currentUser?.username || "Unknown",
-          label: "Auto backup after session",
-          csv: autoBackupCsv,
-        },
-        ...((db.autoBackups || []).slice(0, 19)),
-      ],
-    });
+    commit(
+      {
+        ...db,
+        history: nextHistory,
+        live: nextLive,
+        autoBackups: [
+          {
+            id: uid(),
+            at: new Date().toISOString(),
+            by: currentUser?.username || "Unknown",
+            label: "Auto backup after session",
+            csv: autoBackupCsv,
+          },
+          ...((db.autoBackups || []).slice(0, 19)),
+        ],
+      },
+      {
+        cloudBucket: SYNC_STATE_KEYS.LIVE,
+        additionalCloudWrites: [{ bucket: SYNC_STATE_KEYS.HISTORY, payload: nextHistory }],
+      }
+    );
 
     setTab("history");
     pushToast("✔ Session saved");
@@ -2276,7 +2323,10 @@ function MainApp() {
         ),
       };
     });
-    commit({ ...db, history: nextHistory });
+    commit(
+      { ...db, history: nextHistory },
+      { cloudBucket: SYNC_STATE_KEYS.HISTORY, cloudPayload: nextHistory }
+    );
   }
 
   function setPrizePaymentStatus(sessionId, paymentId, paid) {
@@ -2296,7 +2346,10 @@ function MainApp() {
         ),
       };
     });
-    commit({ ...db, history: nextHistory });
+    commit(
+      { ...db, history: nextHistory },
+      { cloudBucket: SYNC_STATE_KEYS.HISTORY, cloudPayload: nextHistory }
+    );
   }
 
   function resetLive() {
@@ -2323,24 +2376,30 @@ function MainApp() {
     if (!ok2) return;
 
     const fresh = defaultDB();
-    commit({
-      ...db,
-      live: {
-        ...fresh.live,
-        updatedBy: currentUser?.name || "Unknown",
-      },
-      adminEvents: [
-        {
-          id: uid(),
-          action: "clear-all-session-data",
-          by: currentUser?.name || "Unknown",
-          byUserId: currentUser?.id || null,
-          at: new Date().toISOString(),
+    commit(
+      {
+        ...db,
+        live: {
+          ...fresh.live,
+          updatedBy: currentUser?.name || "Unknown",
         },
-        ...(Array.isArray(db.adminEvents) ? db.adminEvents : []),
-      ],
-      history: [],
-    });
+        adminEvents: [
+          {
+            id: uid(),
+            action: "clear-all-session-data",
+            by: currentUser?.name || "Unknown",
+            byUserId: currentUser?.id || null,
+            at: new Date().toISOString(),
+          },
+          ...(Array.isArray(db.adminEvents) ? db.adminEvents : []),
+        ],
+        history: [],
+      },
+      {
+        cloudBucket: SYNC_STATE_KEYS.LIVE,
+        additionalCloudWrites: [{ bucket: SYNC_STATE_KEYS.HISTORY, payload: [] }],
+      }
+    );
     setPlayerDebtOpen({});
     setHistoryOpen({});
     setTab("live");
