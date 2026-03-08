@@ -108,7 +108,7 @@ export function subscribeStateByKey(key, onState, onStatus) {
   devLog("realtime.start", { table: TABLE, id: rowId });
 
   const channel = supabase
-    .channel("classmates-state-sync")
+    .channel(`classmates-state-sync-${rowId}`)
     .on(
       "postgres_changes",
       {

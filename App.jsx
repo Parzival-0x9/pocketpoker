@@ -1407,6 +1407,18 @@ function MainApp() {
       });
     };
 
+    const applyIncomingHistory = (incomingHistory) => {
+      if (!Array.isArray(incomingHistory)) return;
+      setDB((prev) => {
+        const next = {
+          ...prev,
+          history: incomingHistory,
+        };
+        writeLocalCache(next);
+        return next;
+      });
+    };
+
     const onStorage = (e) => {
       if (e.key === DB_KEY && e.newValue) {
         try {
@@ -1425,6 +1437,7 @@ function MainApp() {
     window.addEventListener("storage", onStorage);
 
     let unsubscribeDb = () => {};
+    let unsubscribeHistory = () => {};
     let isRefreshing = false;
     if (hasDatabase()) {
       const refreshRemoteNow = async () => {
@@ -1489,6 +1502,14 @@ function MainApp() {
           }
         }
       );
+      unsubscribeHistory = subscribeStateByKey(
+        SYNC_STATE_KEYS.GLOBAL,
+        (incoming) => {
+          if (cancelled) return;
+          if (!Array.isArray(incoming?.history)) return;
+          applyIncomingHistory(incoming.history);
+        }
+      );
       (async () => {
         try {
           const remoteLive = await fetchLiveStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
@@ -1516,6 +1537,14 @@ function MainApp() {
         } finally {
           if (!cancelled) setSyncBootstrapped(true);
         }
+      })();
+      (async () => {
+        try {
+          const remote = await fetchDatabaseStateWithTimeout();
+          if (cancelled) return;
+          if (!remote || typeof remote !== "object" || !Array.isArray(remote.history)) return;
+          applyIncomingHistory(remote.history);
+        } catch {}
       })();
 
       const pollId = window.setInterval(async () => {
@@ -1571,6 +1600,7 @@ function MainApp() {
         window.clearInterval(pollId);
         window.clearInterval(staleId);
         unsubscribeDb();
+        unsubscribeHistory();
         window.removeEventListener("focus", onWake);
         window.removeEventListener("online", onWake);
         document.removeEventListener("visibilitychange", onVisibility);
@@ -1582,6 +1612,7 @@ function MainApp() {
     return () => {
       cancelled = true;
       unsubscribeDb();
+      unsubscribeHistory();
       channel.close();
       window.removeEventListener("storage", onStorage);
     };
