@@ -683,6 +683,15 @@ function buildUnpaidBuyInDebtRecords(live, sessionMeta = {}) {
     .filter(Boolean);
 }
 
+function formatModeLabel(mode) {
+  return mode === "cash" ? "Cash Game" : "Tournament";
+}
+
+function formatDebtTypeLabel(type) {
+  if (type === "unpaid_buyin") return "Unpaid Buy-in";
+  return safeName(String(type || "Debt").replace(/_/g, " "));
+}
+
 function computeSession(live) {
   const cashPerBuyIn = Math.max(1, Number(live.buyInCashAmount) || 50);
   const chipsPerBuyIn = Math.max(1, Number(live.buyInChipStack) || 50);
@@ -1908,6 +1917,24 @@ function MainApp() {
         ),
     [db.debts]
   );
+  const debtSummaryBySessionId = useMemo(() => {
+    const out = new Map();
+    (Array.isArray(db.debts) ? db.debts : []).forEach((d) => {
+      if (!d || d.type !== "unpaid_buyin") return;
+      const sid = String(d.sessionId || "");
+      if (!sid) return;
+      const current = out.get(sid) || { total: 0, outstanding: 0, settled: 0 };
+      const amount = round2(Number(d.amount) || 0);
+      current.total = round2(current.total + amount);
+      if (d.settled) {
+        current.settled = round2(current.settled + amount);
+      } else {
+        current.outstanding = round2(current.outstanding + amount);
+      }
+      out.set(sid, current);
+    });
+    return out;
+  }, [db.debts]);
   const lastClear = useMemo(
     () =>
       (db.adminEvents || [])
@@ -3437,26 +3464,25 @@ for update to anon using (true) with check (true);`}
             ) : (
               <div className="debt-live-list">
                 {persistedOutstandingDebts.map((d) => (
-                  <div key={d.id} className="tx-item">
-                    <strong>{safeName(d.fromPlayerName || d.fromPlayerId || "Player")}</strong>
-                    <span> owes </span>
-                    <strong>{safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}</strong>
-                    <span> {money(d.amount)}</span>
-                    <span className="muted">
-                      {" · "}
-                      {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"}
-                      {" · "}
-                      {String(d.mode || "-")}
-                      {" · "}
-                      {String(d.type || "-")}
-                    </span>
-                    <button
-                      type="button"
-                      className="tiny-btn"
-                      onClick={() => setDebtSettled(d.id, true)}
-                    >
-                      Mark paid
-                    </button>
+                  <div key={d.id} className="debt-card">
+                    <div className="debt-card-main">
+                      <div className="debt-card-title">
+                        {safeName(d.fromPlayerName || d.fromPlayerId || "Player")} owes {safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}
+                      </div>
+                      <div className="debt-card-amount">{money(d.amount)}</div>
+                      <div className="debt-card-meta muted">
+                        {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"} • {formatModeLabel(d.mode)} • {formatDebtTypeLabel(d.type)}
+                      </div>
+                    </div>
+                    <div className="debt-card-actions">
+                      <button
+                        type="button"
+                        className="tiny-btn"
+                        onClick={() => setDebtSettled(d.id, true)}
+                      >
+                        Mark paid
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3482,6 +3508,7 @@ for update to anon using (true) with check (true);`}
                   {(() => {
                     const settings = h.settings || {};
                     const totals = h.totals || {};
+                    const debtSummary = debtSummaryBySessionId.get(String(h.id || "")) || null;
                     const isOpen = historyOpen[h.id] !== false;
                     return (
                       <>
@@ -3511,6 +3538,16 @@ for update to anon using (true) with check (true);`}
                       {Array.isArray(settings.winnerNames) ? settings.winnerNames.join(", ") : "-"}
                     </div>
                   )}
+                  {isOpen && debtSummary && debtSummary.total > 0 ? (
+                    <div className={`history-debt-line ${debtSummary.outstanding > 0 ? "is-open" : "is-settled"}`}>
+                      <span>Outstanding debt: {money(debtSummary.outstanding)}</span>
+                      {debtSummary.outstanding > 0 ? (
+                        <span className="muted"> · Settled so far {money(debtSummary.settled)}</span>
+                      ) : (
+                        <span> · Debt settled later ✓</span>
+                      )}
+                    </div>
+                  ) : null}
                   {isOpen && (
                   <>
                   <div className="history-group" onClick={(e) => e.stopPropagation()}>

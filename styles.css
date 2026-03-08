@@ -637,6 +637,63 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   display: grid;
   gap: 8px;
 }
+.debt-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.debt-card-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.debt-card-title {
+  font-weight: 600;
+  line-height: 1.3;
+}
+.debt-card-amount {
+  font-size: 20px;
+  font-weight: 700;
+  color: #f3d27a;
+  line-height: 1.1;
+}
+.debt-card-meta {
+  font-size: 12px;
+  line-height: 1.25;
+}
+.debt-card-actions {
+  flex: 0 0 auto;
+}
+.tiny-btn {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.16);
+  color: #b7f7dc;
+}
+.history-debt-line {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.history-debt-line.is-open {
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fecaca;
+}
+.history-debt-line.is-settled {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.12);
+  color: #b7f7dc;
+}
 
 .history-list { display: grid; gap: 10px; }
 .history-card {
@@ -1134,6 +1191,16 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .debt-summary-row { flex-direction: column; align-items: flex-start; }
   .debt-transfer-row { grid-template-columns: 1fr; }
   .debt-transfer-row .btn { width: 100%; }
+  .debt-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .debt-card-actions {
+    width: 100%;
+  }
+  .debt-card-actions .tiny-btn {
+    width: 100%;
+  }
   .player-tracker-head { flex-direction: column; align-items: flex-start; }
   .tap-btn { width: 40px; height: 40px; }
 }
