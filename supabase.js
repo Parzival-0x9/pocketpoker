@@ -19,6 +19,12 @@ export const supabaseAnonKey = sanitizeEnvValue(rawSupabaseAnonKey);
 
 export const hasSupabase = Boolean(supabaseUrl && supabaseAnonKey);
 const isDev = import.meta.env.DEV;
+let supabaseHost = "";
+try {
+  supabaseHost = supabaseUrl ? new URL(supabaseUrl).host : "";
+} catch {
+  supabaseHost = "";
+}
 
 function maskKey(v) {
   const key = String(v || "");
@@ -37,16 +43,28 @@ export const supabase = hasSupabase
     })
   : null;
 
+export const supabaseRuntimeInfo = {
+  rawEnvNames: ["VITE_SUPABASE_URL", "VITE_SUPABASE_ANON_KEY"],
+  hasUrl: Boolean(supabaseUrl),
+  hasAnonKey: Boolean(supabaseAnonKey),
+  sanitizedHost: supabaseHost,
+  anonKeyLength: String(supabaseAnonKey || "").length,
+  urlSanitized: String(rawSupabaseUrl ?? "") !== supabaseUrl,
+  keySanitized: String(rawSupabaseAnonKey ?? "") !== supabaseAnonKey,
+  clientInitialized: Boolean(supabase),
+};
+
 if (isDev) {
   // Dev-only diagnostics for runtime env wiring.
   // Avoid logging full secrets.
   console.info("[Supabase Debug]", {
-    hasUrl: Boolean(supabaseUrl),
-    hasAnonKey: Boolean(supabaseAnonKey),
+    hasUrl: supabaseRuntimeInfo.hasUrl,
+    hasAnonKey: supabaseRuntimeInfo.hasAnonKey,
     anonKeyMasked: maskKey(supabaseAnonKey),
-    anonKeyLength: String(supabaseAnonKey || "").length,
-    urlSanitized: String(rawSupabaseUrl ?? "") !== supabaseUrl,
-    keySanitized: String(rawSupabaseAnonKey ?? "") !== supabaseAnonKey,
-    clientInitialized: Boolean(supabase),
+    anonKeyLength: supabaseRuntimeInfo.anonKeyLength,
+    sanitizedHost: supabaseRuntimeInfo.sanitizedHost || "(invalid-url)",
+    urlSanitized: supabaseRuntimeInfo.urlSanitized,
+    keySanitized: supabaseRuntimeInfo.keySanitized,
+    clientInitialized: supabaseRuntimeInfo.clientInitialized,
   });
 }

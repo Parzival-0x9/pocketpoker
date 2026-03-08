@@ -1164,9 +1164,15 @@ function MainApp() {
     return await Promise.race([
       fetchDatabaseState(),
       new Promise((_, reject) =>
-        window.setTimeout(() => reject(new Error("Cloud load timeout")), ms)
+        window.setTimeout(() => reject(new Error("Network request timed out")), ms)
       ),
     ]);
+  }
+
+  function formatSyncError(err, fallback = "Cloud sync unavailable") {
+    const msg = String(err?.message || err || "").trim();
+    if (!msg) return fallback;
+    return msg;
   }
 
   function toLocalCachePayload(state) {
@@ -1294,7 +1300,7 @@ function MainApp() {
         } catch (err) {
           if (cancelled) return;
           setSyncState("error");
-          setSyncError("Cloud sync unavailable. Using local session only.");
+          setSyncError(formatSyncError(err, "Cloud sync unavailable"));
           setPendingCloudWrite(false);
           setSyncNote("Using local session only");
         } finally {
@@ -1304,16 +1310,28 @@ function MainApp() {
 
       setSyncState("connecting");
       setSyncError("");
-      unsubscribeDb = subscribeDatabaseState((incoming) => {
-        if (cancelled) return;
-        applyIncoming(incoming);
-        setRemoteLoaded(true);
-        setSyncState("connected");
-        setSyncError("");
-        setPendingCloudWrite(false);
-        setSyncNote("");
-        setLastSyncAt(new Date().toISOString());
-      });
+      unsubscribeDb = subscribeDatabaseState(
+        (incoming) => {
+          if (cancelled) return;
+          applyIncoming(incoming);
+          setRemoteLoaded(true);
+          setSyncState("connected");
+          setSyncError("");
+          setPendingCloudWrite(false);
+          setSyncNote("");
+          setLastSyncAt(new Date().toISOString());
+        },
+        (status) => {
+          if (cancelled) return;
+          const s = String(status || "").toUpperCase();
+          if (s === "CHANNEL_ERROR" || s === "TIMED_OUT" || s === "CLOSED") {
+            setSyncState("error");
+            setSyncError("Realtime subscription failed");
+            setPendingCloudWrite(false);
+            setSyncNote("Using local session only");
+          }
+        }
+      );
       (async () => {
         try {
           const remote = await fetchDatabaseStateWithTimeout();
@@ -1337,7 +1355,7 @@ function MainApp() {
         } catch (err) {
           if (cancelled) return;
           setSyncState("error");
-          setSyncError("Cloud sync unavailable. Using local session only.");
+          setSyncError(formatSyncError(err, "Cloud sync unavailable"));
           setPendingCloudWrite(false);
           setSyncNote("Using local session only");
         } finally {
@@ -1367,7 +1385,7 @@ function MainApp() {
         } catch (err) {
           if (cancelled) return;
           setSyncState("error");
-          setSyncError("Cloud sync unavailable. Using local session only.");
+          setSyncError(formatSyncError(err, "Cloud sync unavailable"));
           setPendingCloudWrite(false);
           setSyncNote("Using local session only");
         }
@@ -1430,7 +1448,7 @@ function MainApp() {
     if (hasDatabase()) {
       if (!remoteLoadedRef.current) {
         setSyncState("error");
-        setSyncError("Cloud sync unavailable. Using local session only.");
+        setSyncError("Cloud not safely loaded yet");
         setPendingCloudWrite(false);
         setSyncNote("Using local session only");
         return;
@@ -1487,7 +1505,7 @@ function MainApp() {
       setSyncNote(message);
     } catch (err) {
       setSyncState("error");
-      setSyncError("Cloud sync unavailable. Using local session only.");
+      setSyncError(formatSyncError(err, "Cloud sync unavailable"));
       setPendingCloudWrite(false);
       setSyncNote("Using local session only");
     } finally {
