@@ -189,41 +189,26 @@ function loadDB() {
     const raw = localStorage.getItem(DB_KEY);
     if (!raw) return defaultDB();
     const parsed = JSON.parse(raw);
+    const localLive = parsed?.live && typeof parsed.live === "object" ? parsed.live : {};
     const players =
-      Array.isArray(parsed?.live?.players) && parsed.live.players.length
-        ? parsed.live.players.map((p) => normalizeLivePlayer(p, Number(parsed?.live?.buyInCashAmount || 0)))
+      Array.isArray(localLive?.players) && localLive.players.length
+        ? localLive.players.map((p) => normalizeLivePlayer(p, Number(localLive?.buyInCashAmount || 0)))
         : [blankPlayer(), blankPlayer()];
     return {
       ...defaultDB(),
-      ...parsed,
-      rev: Number.isFinite(Number(parsed.rev)) ? Number(parsed.rev) : 0,
       live: {
         ...defaultDB().live,
-        ...(parsed.live || {}),
-        mode: parsed?.live?.mode === "cash" ? "cash" : "tournament",
-        prizeEnabled: typeof parsed?.live?.prizeEnabled === "boolean" ? parsed.live.prizeEnabled : true,
-        prizePerPlayer: Math.max(0, Number(parsed?.live?.prizePerPlayer || 20)),
+        ...localLive,
+        mode: localLive?.mode === "cash" ? "cash" : "tournament",
+        prizeEnabled: typeof localLive?.prizeEnabled === "boolean" ? localLive.prizeEnabled : true,
+        prizePerPlayer: Math.max(0, Number(localLive?.prizePerPlayer || 20)),
         players,
-        potHolderPlayerId: resolvePotHolderPlayerId(players, parsed?.live?.potHolderPlayerId),
+        potHolderPlayerId: resolvePotHolderPlayerId(players, localLive?.potHolderPlayerId),
       },
-      users: normalizeUsers(parsed.users),
-      presence:
-        parsed.presence && typeof parsed.presence === "object" && !Array.isArray(parsed.presence)
-          ? parsed.presence
+      settings:
+        parsed?.settings && typeof parsed.settings === "object" && !Array.isArray(parsed.settings)
+          ? parsed.settings
           : {},
-      autoBackups: Array.isArray(parsed.autoBackups)
-        ? parsed.autoBackups
-            .map((b) => ({
-              id: b?.id || uid(),
-              at: b?.at || new Date().toISOString(),
-              by: safeName(b?.by || "Unknown"),
-              csv: typeof b?.csv === "string" ? b.csv : "",
-              label: typeof b?.label === "string" ? b.label : "Session Auto Backup",
-            }))
-            .filter((b) => b.csv)
-        : [],
-      adminEvents: Array.isArray(parsed.adminEvents) ? parsed.adminEvents : [],
-      history: Array.isArray(parsed.history) ? parsed.history : [],
     };
   } catch {
     return defaultDB();
@@ -1110,6 +1095,7 @@ function MainApp() {
   const lastSyncAtRef = useRef(lastSyncAt);
   const pendingCloudWriteRef = useRef(pendingCloudWrite);
   const toastSeqRef = useRef(0);
+  const LOCAL_CACHE_LIMIT_MSG = "Local cache limit reached. Session saved to cloud.";
 
   useEffect(() => {
     dbRef.current = db;
@@ -1167,9 +1153,33 @@ function MainApp() {
     }, 220);
   }
 
+  function toLocalCachePayload(state) {
+    return {
+      live: state?.live || defaultDB().live,
+      settings:
+        state?.settings && typeof state.settings === "object" && !Array.isArray(state.settings)
+          ? state.settings
+          : {},
+    };
+  }
+
+  function writeLocalCache(state) {
+    try {
+      localStorage.setItem(DB_KEY, JSON.stringify(toLocalCachePayload(state)));
+      return true;
+    } catch (err) {
+      const quotaHit = /quota/i.test(String(err?.name || "")) || /quota/i.test(String(err?.message || ""));
+      if (quotaHit) {
+        setSyncNote(LOCAL_CACHE_LIMIT_MSG);
+        pushToast(LOCAL_CACHE_LIMIT_MSG);
+      }
+      return false;
+    }
+  }
+
   function applyLocalState(nextState, broadcast = true) {
     setDB(nextState);
-    localStorage.setItem(DB_KEY, JSON.stringify(nextState));
+    writeLocalCache(nextState);
     if (!broadcast) return;
     const channel = new BroadcastChannel("classmates_live");
     channel.postMessage({ type: "db-update", payload: nextState });
@@ -1182,7 +1192,7 @@ function MainApp() {
         ...prev,
         presence: nextPresence,
       };
-      localStorage.setItem(DB_KEY, JSON.stringify(next));
+      writeLocalCache(next);
       const channel = new BroadcastChannel("classmates_live");
       channel.postMessage({ type: "db-update", payload: next });
       channel.close();
@@ -1198,8 +1208,24 @@ function MainApp() {
       if (!incoming || typeof incoming !== "object") return;
       const preferIncoming = !!options.preferIncoming;
       setDB((prev) => {
-        const next = preferIncoming ? incoming : pickNewestState(prev, incoming);
-        localStorage.setItem(DB_KEY, JSON.stringify(next));
+        const incomingIsFull = Array.isArray(incoming?.history) || Array.isArray(incoming?.users);
+        const mergedIncoming = incomingIsFull
+          ? incoming
+          : {
+              ...prev,
+              live: {
+                ...(prev?.live || defaultDB().live),
+                ...(incoming?.live || {}),
+              },
+              settings: {
+                ...(prev?.settings || {}),
+                ...((incoming?.settings && typeof incoming.settings === "object" && !Array.isArray(incoming.settings))
+                  ? incoming.settings
+                  : {}),
+              },
+            };
+        const next = preferIncoming ? mergedIncoming : pickNewestState(prev, mergedIncoming);
+        writeLocalCache(next);
         return next;
       });
     };
@@ -1387,7 +1413,7 @@ function MainApp() {
           message = "Synced local changes to cloud.";
         } else if (freshness < 0) {
           setDB(() => {
-            localStorage.setItem(DB_KEY, JSON.stringify(remote));
+            writeLocalCache(remote);
             return remote;
           });
           message = "Pulled latest data from cloud.";
