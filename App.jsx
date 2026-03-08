@@ -208,7 +208,7 @@ function loadDB() {
         ...localLive,
         mode: localLive?.mode === "cash" ? "cash" : "tournament",
         prizeEnabled: typeof localLive?.prizeEnabled === "boolean" ? localLive.prizeEnabled : true,
-        prizePerPlayer: Math.max(0, Number(localLive?.prizePerPlayer || 20)),
+        prizePerPlayer: Math.max(0, Number(localLive?.prizePerPlayer ?? 20) || 0),
         players,
         potHolderPlayerId: resolvePotHolderPlayerId(players, localLive?.potHolderPlayerId),
       },
@@ -707,12 +707,15 @@ const LIVE_SETTINGS_KEYS = [
 function extractLiveSettings(live) {
   const base = defaultDB().live;
   const src = live && typeof live === "object" ? live : {};
+  const cashCandidate = Number(src.buyInCashAmount ?? base.buyInCashAmount);
+  const chipCandidate = Number(src.buyInChipStack ?? base.buyInChipStack);
+  const prizeCandidate = Number(src.prizePerPlayer ?? base.prizePerPlayer);
   return {
     mode: src.mode === "cash" ? "cash" : "tournament",
-    buyInCashAmount: Math.max(1, Number(src.buyInCashAmount ?? base.buyInCashAmount) || base.buyInCashAmount),
-    buyInChipStack: Math.max(1, Number(src.buyInChipStack ?? base.buyInChipStack) || base.buyInChipStack),
+    buyInCashAmount: Number.isFinite(cashCandidate) ? Math.max(0, cashCandidate) : Math.max(0, Number(base.buyInCashAmount) || 0),
+    buyInChipStack: Number.isFinite(chipCandidate) ? Math.max(0, chipCandidate) : Math.max(0, Number(base.buyInChipStack) || 0),
     prizeEnabled: typeof src.prizeEnabled === "boolean" ? src.prizeEnabled : base.prizeEnabled,
-    prizePerPlayer: Math.max(0, Number(src.prizePerPlayer ?? base.prizePerPlayer) || base.prizePerPlayer),
+    prizePerPlayer: Number.isFinite(prizeCandidate) ? Math.max(0, prizeCandidate) : Math.max(0, Number(base.prizePerPlayer) || 0),
   };
 }
 
@@ -722,6 +725,12 @@ function normalizeIncomingSettingsPayload(payload) {
   const keys = Object.keys(payload);
   if (!keys.some((k) => LIVE_SETTINGS_KEYS.includes(k))) return null;
   return extractLiveSettings(payload);
+}
+
+function formatMappingInputValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return "0";
+  return String(n);
 }
 
 function computeSession(live) {
@@ -1178,6 +1187,16 @@ function MainApp() {
   const [mergeSourcePlayerId, setMergeSourcePlayerId] = useState("");
   const [mergeTargetPlayerId, setMergeTargetPlayerId] = useState("");
   const [toasts, setToasts] = useState([]);
+  const [mappingDraft, setMappingDraft] = useState(() => ({
+    buyInCashAmount: formatMappingInputValue(db?.live?.buyInCashAmount),
+    buyInChipStack: formatMappingInputValue(db?.live?.buyInChipStack),
+    prizePerPlayer: formatMappingInputValue(db?.live?.prizePerPlayer),
+  }));
+  const [mappingFocus, setMappingFocus] = useState({
+    buyInCashAmount: false,
+    buyInChipStack: false,
+    prizePerPlayer: false,
+  });
   const backupInputRef = useRef(null);
   const addPlayerSelectRef = useRef(null);
   const dbRef = useRef(db);
@@ -1207,6 +1226,27 @@ function MainApp() {
   useEffect(() => {
     pendingCloudWriteRef.current = pendingCloudWrite;
   }, [pendingCloudWrite]);
+
+  useEffect(() => {
+    setMappingDraft((prev) => ({
+      buyInCashAmount: mappingFocus.buyInCashAmount
+        ? prev.buyInCashAmount
+        : formatMappingInputValue(db?.live?.buyInCashAmount),
+      buyInChipStack: mappingFocus.buyInChipStack
+        ? prev.buyInChipStack
+        : formatMappingInputValue(db?.live?.buyInChipStack),
+      prizePerPlayer: mappingFocus.prizePerPlayer
+        ? prev.prizePerPlayer
+        : formatMappingInputValue(db?.live?.prizePerPlayer),
+    }));
+  }, [
+    db?.live?.buyInCashAmount,
+    db?.live?.buyInChipStack,
+    db?.live?.prizePerPlayer,
+    mappingFocus.buyInCashAmount,
+    mappingFocus.buyInChipStack,
+    mappingFocus.prizePerPlayer,
+  ]);
 
   useEffect(() => {
     remoteLoadedRef.current = remoteLoaded;
@@ -1962,8 +2002,9 @@ function MainApp() {
 
   useEffect(() => {
     if (!currentUser) return;
-    const chips = Number(db?.live?.buyInChipStack || 0);
-    if (chips > 1) return;
+    const rawChips = db?.live?.buyInChipStack;
+    const chips = Number(rawChips);
+    if (rawChips !== null && rawChips !== undefined && Number.isFinite(chips)) return;
     updateLive((live) => ({
       ...live,
       buyInChipStack: 50,
@@ -2208,14 +2249,14 @@ function MainApp() {
   function setCashBuyIn(v) {
     updateLiveSettings((live) => ({
       ...live,
-      buyInCashAmount: Math.max(1, Number(v) || 1),
+      buyInCashAmount: Math.max(0, Number(v) || 0),
     }));
   }
 
   function setChipStack(v) {
     updateLiveSettings((live) => ({
       ...live,
-      buyInChipStack: Math.max(1, Number(v) || 1),
+      buyInChipStack: Math.max(0, Number(v) || 0),
     }));
   }
 
@@ -2228,6 +2269,45 @@ function MainApp() {
       ...live,
       prizePerPlayer: Math.max(0, Number(v) || 0),
     }));
+  }
+
+  function handleMappingInputChange(field, value) {
+    setMappingDraft((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  }
+
+  function handleMappingInputFocus(field) {
+    setMappingFocus((prev) => ({
+      ...prev,
+      [field]: true,
+    }));
+  }
+
+  function handleMappingInputBlur(field, setter) {
+    const raw = String(mappingDraft[field] ?? "").trim();
+    setMappingFocus((prev) => ({
+      ...prev,
+      [field]: false,
+    }));
+    if (raw === "") {
+      setter(0);
+      setMappingDraft((prev) => ({
+        ...prev,
+        [field]: "0",
+      }));
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setMappingDraft((prev) => ({
+        ...prev,
+        [field]: formatMappingInputValue(db?.live?.[field]),
+      }));
+      return;
+    }
+    setter(parsed);
   }
 
   function setGameMode(v) {
@@ -3001,9 +3081,12 @@ function MainApp() {
                   <input
                     className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
                     type="number"
-                    min="1"
-                    value={db.live.buyInCashAmount}
-                    onChange={(e) => setCashBuyIn(e.target.value)}
+                    min="0"
+                    inputMode="decimal"
+                    value={mappingDraft.buyInCashAmount}
+                    onChange={(e) => handleMappingInputChange("buyInCashAmount", e.target.value)}
+                    onFocus={() => handleMappingInputFocus("buyInCashAmount")}
+                    onBlur={() => handleMappingInputBlur("buyInCashAmount", setCashBuyIn)}
                   />
                 </label>
                 <label className="space-y-2">
@@ -3011,9 +3094,12 @@ function MainApp() {
                   <input
                     className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
                     type="number"
-                    min="1"
-                    value={db.live.buyInChipStack}
-                    onChange={(e) => setChipStack(e.target.value)}
+                    min="0"
+                    inputMode="numeric"
+                    value={mappingDraft.buyInChipStack}
+                    onChange={(e) => handleMappingInputChange("buyInChipStack", e.target.value)}
+                    onFocus={() => handleMappingInputFocus("buyInChipStack")}
+                    onBlur={() => handleMappingInputBlur("buyInChipStack", setChipStack)}
                   />
                 </label>
                 {db.live?.mode === "tournament" && (
@@ -3024,9 +3110,12 @@ function MainApp() {
                         className="h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-emerald-50"
                         type="number"
                         min="0"
+                        inputMode="decimal"
                         step="1"
-                        value={db.live.prizePerPlayer}
-                        onChange={(e) => setPrizePerPlayer(e.target.value)}
+                        value={mappingDraft.prizePerPlayer}
+                        onChange={(e) => handleMappingInputChange("prizePerPlayer", e.target.value)}
+                        onFocus={() => handleMappingInputFocus("prizePerPlayer")}
+                        onBlur={() => handleMappingInputBlur("prizePerPlayer", setPrizePerPlayer)}
                       />
                     </label>
                     <label className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2">
