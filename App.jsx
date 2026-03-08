@@ -692,6 +692,34 @@ function formatDebtTypeLabel(type) {
   return safeName(String(type || "Debt").replace(/_/g, " "));
 }
 
+const LIVE_SETTINGS_KEYS = [
+  "mode",
+  "buyInCashAmount",
+  "buyInChipStack",
+  "prizeEnabled",
+  "prizePerPlayer",
+];
+
+function extractLiveSettings(live) {
+  const base = defaultDB().live;
+  const src = live && typeof live === "object" ? live : {};
+  return {
+    mode: src.mode === "cash" ? "cash" : "tournament",
+    buyInCashAmount: Math.max(1, Number(src.buyInCashAmount ?? base.buyInCashAmount) || base.buyInCashAmount),
+    buyInChipStack: Math.max(1, Number(src.buyInChipStack ?? base.buyInChipStack) || base.buyInChipStack),
+    prizeEnabled: typeof src.prizeEnabled === "boolean" ? src.prizeEnabled : base.prizeEnabled,
+    prizePerPlayer: Math.max(0, Number(src.prizePerPlayer ?? base.prizePerPlayer) || base.prizePerPlayer),
+  };
+}
+
+function normalizeIncomingSettingsPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  if (payload.live && typeof payload.live === "object") return extractLiveSettings(payload.live);
+  const keys = Object.keys(payload);
+  if (!keys.some((k) => LIVE_SETTINGS_KEYS.includes(k))) return null;
+  return extractLiveSettings(payload);
+}
+
 function computeSession(live) {
   const cashPerBuyIn = Math.max(1, Number(live.buyInCashAmount) || 50);
   const chipsPerBuyIn = Math.max(1, Number(live.buyInChipStack) || 50);
@@ -1296,6 +1324,23 @@ function MainApp() {
     return null;
   }
 
+  async function fetchSettingsStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS, options = {}) {
+    const allowGlobalFallback = !!options.allowGlobalFallback;
+    const settings = await Promise.race([
+      fetchStateByKey(SYNC_STATE_KEYS.SETTINGS),
+      new Promise((_, reject) =>
+        window.setTimeout(() => reject(new Error("Network request timed out")), ms)
+      ),
+    ]);
+    const normalized = normalizeIncomingSettingsPayload(settings);
+    if (normalized) return normalized;
+    if (settings != null) return null;
+    if (!allowGlobalFallback) return null;
+
+    const legacy = await fetchDatabaseStateWithTimeout(ms);
+    return normalizeIncomingSettingsPayload(legacy);
+  }
+
   function refreshPendingCloudWriteFlag() {
     const pending = Boolean(
       cloudWriteInFlightRef.current ||
@@ -1520,6 +1565,22 @@ function MainApp() {
       });
     };
 
+    const applyIncomingSettings = (incomingSettings) => {
+      const normalized = normalizeIncomingSettingsPayload(incomingSettings);
+      if (!normalized) return;
+      setDB((prev) => {
+        const next = {
+          ...prev,
+          live: {
+            ...(prev?.live || defaultDB().live),
+            ...normalized,
+          },
+        };
+        writeLocalCache(next);
+        return next;
+      });
+    };
+
     const onStorage = (e) => {
       if (e.key === DB_KEY && e.newValue) {
         try {
@@ -1540,6 +1601,7 @@ function MainApp() {
     let unsubscribeDb = () => {};
     let unsubscribeHistory = () => {};
     let unsubscribeDebts = () => {};
+    let unsubscribeSettings = () => {};
     let isRefreshing = false;
     if (hasDatabase()) {
       const refreshRemoteNow = async () => {
@@ -1628,6 +1690,13 @@ function MainApp() {
           applyIncomingDebts(incoming.debts);
         }
       );
+      unsubscribeSettings = subscribeStateByKey(
+        SYNC_STATE_KEYS.SETTINGS,
+        (incoming) => {
+          if (cancelled) return;
+          applyIncomingSettings(incoming);
+        }
+      );
       (async () => {
         try {
           const remoteLive = await fetchLiveStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
@@ -1674,6 +1743,15 @@ function MainApp() {
           if (cancelled) return;
           if (!Array.isArray(remoteDebts)) return;
           applyIncomingDebts(remoteDebts);
+        } catch {}
+      })();
+      (async () => {
+        try {
+          const remoteSettings = await fetchSettingsStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
+            allowGlobalFallback: true,
+          });
+          if (cancelled || !remoteSettings) return;
+          applyIncomingSettings(remoteSettings);
         } catch {}
       })();
 
@@ -1732,6 +1810,7 @@ function MainApp() {
         unsubscribeDb();
         unsubscribeHistory();
         unsubscribeDebts();
+        unsubscribeSettings();
         window.removeEventListener("focus", onWake);
         window.removeEventListener("online", onWake);
         document.removeEventListener("visibilitychange", onVisibility);
@@ -1745,6 +1824,7 @@ function MainApp() {
       unsubscribeDb();
       unsubscribeHistory();
       unsubscribeDebts();
+      unsubscribeSettings();
       channel.close();
       window.removeEventListener("storage", onStorage);
     };
@@ -1901,6 +1981,34 @@ function MainApp() {
       }
     );
   }
+
+  function updateLiveSettings(fn) {
+    const baseLive = db.live || defaultDB().live;
+    const nextLiveRaw = fn({ ...baseLive });
+    const normalizedPlayers = Array.isArray(nextLiveRaw?.players) ? nextLiveRaw.players : [];
+    const nextLive = {
+      ...nextLiveRaw,
+      potHolderPlayerId: resolvePotHolderPlayerId(
+        normalizedPlayers.length ? normalizedPlayers : baseLive.players,
+        nextLiveRaw?.potHolderPlayerId ?? baseLive.potHolderPlayerId
+      ),
+    };
+    const settingsPayload = extractLiveSettings(nextLive);
+    commit(
+      {
+        ...db,
+        live: {
+          ...nextLive,
+          updatedBy: currentUser?.name || "Unknown",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      {
+        cloudBucket: SYNC_STATE_KEYS.SETTINGS,
+        cloudPayload: settingsPayload,
+      }
+    );
+  }
   const computed = useMemo(() => computeSession(db.live), [db.live]);
   const buyInDebtSummary = useMemo(
     () => (db.live?.mode === "cash" ? calculateOutstandingBuyIns(db.live) : { debts: [], collected: 0, total: 0, potHolderId: "", potHolderName: "" }),
@@ -2051,32 +2159,32 @@ function MainApp() {
   }, [db.presence, db.users, profiles]);
 
   function setCashBuyIn(v) {
-    updateLive((live) => ({
+    updateLiveSettings((live) => ({
       ...live,
       buyInCashAmount: Math.max(1, Number(v) || 1),
     }));
   }
 
   function setChipStack(v) {
-    updateLive((live) => ({
+    updateLiveSettings((live) => ({
       ...live,
       buyInChipStack: Math.max(1, Number(v) || 1),
     }));
   }
 
   function setPrizeEnabled(v) {
-    updateLive((live) => ({ ...live, prizeEnabled: !!v }));
+    updateLiveSettings((live) => ({ ...live, prizeEnabled: !!v }));
   }
 
   function setPrizePerPlayer(v) {
-    updateLive((live) => ({
+    updateLiveSettings((live) => ({
       ...live,
       prizePerPlayer: Math.max(0, Number(v) || 0),
     }));
   }
 
   function setGameMode(v) {
-    updateLive((live) => ({
+    updateLiveSettings((live) => ({
       ...live,
       mode: v === "cash" ? "cash" : "tournament",
     }));
