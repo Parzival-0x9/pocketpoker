@@ -29,6 +29,7 @@ const ONLINE_WINDOW_MS = 120000;
 const SYNC_STALE_MS = 45000;
 const CLOUD_FETCH_TIMEOUT_MS = 7000;
 const CLOUD_WRITE_DEBOUNCE_MS = 250;
+const SYNC_FAILURE_THRESHOLD = 3;
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -1104,6 +1105,7 @@ function MainApp() {
   const cloudWriteInFlightRef = useRef(false);
   const queuedCloudWritesRef = useRef(new Map());
   const cloudWriteTimerRef = useRef(null);
+  const consecutiveSyncFailuresRef = useRef(0);
   const toastSeqRef = useRef(0);
   const LOCAL_CACHE_LIMIT_MSG = "Local cache limit reached. Session saved to cloud.";
 
@@ -1213,6 +1215,23 @@ function MainApp() {
     setPendingCloudWrite(pending);
   }
 
+  function resetSyncFailures() {
+    consecutiveSyncFailuresRef.current = 0;
+  }
+
+  function handleSyncFailure(message) {
+    const nextCount = consecutiveSyncFailuresRef.current + 1;
+    consecutiveSyncFailuresRef.current = nextCount;
+    if (nextCount >= SYNC_FAILURE_THRESHOLD) {
+      setSyncState("error");
+      setSyncError(String(message || "Cloud sync unavailable"));
+      setSyncNote("Using local session only");
+      return;
+    }
+    setSyncError("");
+    setSyncNote("Sync reconnecting...");
+  }
+
   async function flushCloudWriteQueue() {
     if (!hasDatabase()) {
       queuedCloudWritesRef.current.clear();
@@ -1237,14 +1256,13 @@ function MainApp() {
         } else {
           await pushStateByKey(bucket, payload);
         }
+        resetSyncFailures();
         setSyncState("connected");
         setSyncError("");
         setSyncNote("");
         setLastSyncAt(new Date().toISOString());
       } catch (err) {
-        setSyncState("error");
-        setSyncError(String(err?.message || err || "Database write failed"));
-        setSyncNote("Using local session only");
+        handleSyncFailure(String(err?.message || err || "Database write failed"));
       } finally {
         cloudWriteInFlightRef.current = false;
         refreshPendingCloudWriteFlag();
@@ -1419,12 +1437,11 @@ function MainApp() {
           if (cancelled) return;
           if (remoteLive && typeof remoteLive === "object") {
             applyIncomingLive(remoteLive);
+            resetSyncFailures();
             setRemoteLoaded(true);
           } else {
-            setSyncState("error");
-            setSyncError("Cloud sync unavailable. Using local session only.");
+            handleSyncFailure("Cloud sync unavailable. Using local session only.");
             setPendingCloudWrite(false);
-            setSyncNote("Using local session only");
             return;
           }
           setSyncState("connected");
@@ -1434,10 +1451,8 @@ function MainApp() {
           setLastSyncAt(new Date().toISOString());
         } catch (err) {
           if (cancelled) return;
-          setSyncState("error");
-          setSyncError(formatSyncError(err, "Cloud sync unavailable"));
+          handleSyncFailure(formatSyncError(err, "Cloud sync unavailable"));
           setPendingCloudWrite(false);
-          setSyncNote("Using local session only");
         } finally {
           isRefreshing = false;
         }
@@ -1450,6 +1465,7 @@ function MainApp() {
         (incoming) => {
           if (cancelled) return;
           applyIncomingLive(incoming);
+          resetSyncFailures();
           setRemoteLoaded(true);
           setSyncState("connected");
           setSyncError("");
@@ -1461,10 +1477,13 @@ function MainApp() {
           if (cancelled) return;
           const s = String(status || "").toUpperCase();
           if (s === "CHANNEL_ERROR" || s === "TIMED_OUT" || s === "CLOSED") {
-            setSyncState("error");
-            setSyncError("Realtime subscription failed");
+            handleSyncFailure("Realtime subscription failed");
             setPendingCloudWrite(false);
-            setSyncNote("Using local session only");
+          } else if (s === "SUBSCRIBED") {
+            resetSyncFailures();
+            setSyncState("connected");
+            setSyncError("");
+            setSyncNote("");
           }
         }
       );
@@ -1474,12 +1493,11 @@ function MainApp() {
           if (cancelled) return;
           if (remoteLive && typeof remoteLive === "object") {
             applyIncomingLive(remoteLive, { preferIncoming: true });
+            resetSyncFailures();
             setRemoteLoaded(true);
           } else {
-            setSyncState("error");
-            setSyncError("Cloud sync unavailable. Using local session only.");
+            handleSyncFailure("Cloud sync unavailable. Using local session only.");
             setPendingCloudWrite(false);
-            setSyncNote("Using local session only");
             return;
           }
           setSyncState("connected");
@@ -1489,10 +1507,8 @@ function MainApp() {
           setLastSyncAt(new Date().toISOString());
         } catch (err) {
           if (cancelled) return;
-          setSyncState("error");
-          setSyncError(formatSyncError(err, "Cloud sync unavailable"));
+          handleSyncFailure(formatSyncError(err, "Cloud sync unavailable"));
           setPendingCloudWrite(false);
-          setSyncNote("Using local session only");
         } finally {
           if (!cancelled) setSyncBootstrapped(true);
         }
@@ -1504,13 +1520,12 @@ function MainApp() {
           const remoteLive = await fetchLiveStateWithTimeout();
           if (cancelled) return;
           if (!remoteLive || typeof remoteLive !== "object") {
-            setSyncState("error");
-            setSyncError("Cloud sync unavailable. Using local session only.");
+            handleSyncFailure("Cloud sync unavailable. Using local session only.");
             setPendingCloudWrite(false);
-            setSyncNote("Using local session only");
             return;
           }
           applyIncomingLive(remoteLive);
+          resetSyncFailures();
           setRemoteLoaded(true);
           setSyncState("connected");
           setSyncError("");
@@ -1519,10 +1534,8 @@ function MainApp() {
           setLastSyncAt(new Date().toISOString());
         } catch (err) {
           if (cancelled) return;
-          setSyncState("error");
-          setSyncError(formatSyncError(err, "Cloud sync unavailable"));
+          handleSyncFailure(formatSyncError(err, "Cloud sync unavailable"));
           setPendingCloudWrite(false);
-          setSyncNote("Using local session only");
         }
       }, 4000);
 
