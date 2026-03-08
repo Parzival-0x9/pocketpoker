@@ -704,27 +704,34 @@ const LIVE_SETTINGS_KEYS = [
   "prizePerPlayer",
 ];
 
-function extractLiveSettings(live) {
-  const base = defaultDB().live;
+function extractLiveSettings(live, baseLive = null) {
+  const fallbackBase = defaultDB().live;
+  const base = baseLive && typeof baseLive === "object" ? baseLive : fallbackBase;
   const src = live && typeof live === "object" ? live : {};
   const cashCandidate = Number(src.buyInCashAmount ?? base.buyInCashAmount);
   const chipCandidate = Number(src.buyInChipStack ?? base.buyInChipStack);
   const prizeCandidate = Number(src.prizePerPlayer ?? base.prizePerPlayer);
+  const modeCandidate = src.mode;
   return {
-    mode: src.mode === "cash" ? "cash" : "tournament",
+    mode:
+      modeCandidate === "cash" || modeCandidate === "tournament"
+        ? modeCandidate
+        : base.mode === "cash"
+          ? "cash"
+          : "tournament",
     buyInCashAmount: Number.isFinite(cashCandidate) ? Math.max(0, cashCandidate) : Math.max(0, Number(base.buyInCashAmount) || 0),
     buyInChipStack: Number.isFinite(chipCandidate) ? Math.max(0, chipCandidate) : Math.max(0, Number(base.buyInChipStack) || 0),
-    prizeEnabled: typeof src.prizeEnabled === "boolean" ? src.prizeEnabled : base.prizeEnabled,
+    prizeEnabled: typeof src.prizeEnabled === "boolean" ? src.prizeEnabled : !!base.prizeEnabled,
     prizePerPlayer: Number.isFinite(prizeCandidate) ? Math.max(0, prizeCandidate) : Math.max(0, Number(base.prizePerPlayer) || 0),
   };
 }
 
-function normalizeIncomingSettingsPayload(payload) {
+function normalizeIncomingSettingsPayload(payload, baseLive = null) {
   if (!payload || typeof payload !== "object") return null;
-  if (payload.live && typeof payload.live === "object") return extractLiveSettings(payload.live);
+  if (payload.live && typeof payload.live === "object") return extractLiveSettings(payload.live, baseLive);
   const keys = Object.keys(payload);
   if (!keys.some((k) => LIVE_SETTINGS_KEYS.includes(k))) return null;
-  return extractLiveSettings(payload);
+  return extractLiveSettings(payload, baseLive);
 }
 
 function formatMappingInputValue(value) {
@@ -1383,13 +1390,13 @@ function MainApp() {
         window.setTimeout(() => reject(new Error("Network request timed out")), ms)
       ),
     ]);
-    const normalized = normalizeIncomingSettingsPayload(settings);
+    const normalized = normalizeIncomingSettingsPayload(settings, dbRef.current?.live || defaultDB().live);
     if (normalized) return normalized;
     if (settings != null) return null;
     if (!allowGlobalFallback) return null;
 
     const legacy = await fetchDatabaseStateWithTimeout(ms);
-    return normalizeIncomingSettingsPayload(legacy);
+    return normalizeIncomingSettingsPayload(legacy, dbRef.current?.live || defaultDB().live);
   }
 
   function refreshPendingCloudWriteFlag() {
@@ -1623,9 +1630,9 @@ function MainApp() {
     };
 
     const applyIncomingSettings = (incomingSettings) => {
-      const normalized = normalizeIncomingSettingsPayload(incomingSettings);
-      if (!normalized) return;
       setDB((prev) => {
+        const normalized = normalizeIncomingSettingsPayload(incomingSettings, prev?.live || defaultDB().live);
+        if (!normalized) return prev;
         const next = {
           ...prev,
           live: {
