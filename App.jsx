@@ -677,6 +677,7 @@ function buildUnpaidBuyInDebtRecords(live, sessionMeta = {}) {
         type: "unpaid_buyin",
         settled: false,
         settledAt: null,
+        settledBy: null,
       };
     })
     .filter(Boolean);
@@ -2462,6 +2463,7 @@ function MainApp() {
             ...d,
             settled: !!settled,
             settledAt: settled ? new Date().toISOString() : null,
+            settledBy: settled ? currentUser?.name || currentUser?.username || null : null,
           }
         : d
     );
@@ -3440,6 +3442,14 @@ for update to anon using (true) with check (true);`}
                     <span> owes </span>
                     <strong>{safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}</strong>
                     <span> {money(d.amount)}</span>
+                    <span className="muted">
+                      {" · "}
+                      {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"}
+                      {" · "}
+                      {String(d.mode || "-")}
+                      {" · "}
+                      {String(d.type || "-")}
+                    </span>
                     <button
                       type="button"
                       className="tiny-btn"
