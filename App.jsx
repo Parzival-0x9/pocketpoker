@@ -1188,7 +1188,8 @@ function MainApp() {
     ]);
   }
 
-  async function fetchLiveStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS) {
+  async function fetchLiveStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS, options = {}) {
+    const allowGlobalFallback = !!options.allowGlobalFallback;
     const live = await Promise.race([
       fetchStateByKey(SYNC_STATE_KEYS.LIVE),
       new Promise((_, reject) =>
@@ -1197,6 +1198,7 @@ function MainApp() {
     ]);
     if (live && typeof live === "object") return live;
     if (live != null) return null;
+    if (!allowGlobalFallback) return null;
 
     const legacy = await fetchDatabaseStateWithTimeout(ms);
     if (legacy && typeof legacy === "object" && legacy.live && typeof legacy.live === "object") {
@@ -1489,7 +1491,9 @@ function MainApp() {
       );
       (async () => {
         try {
-          const remoteLive = await fetchLiveStateWithTimeout();
+          const remoteLive = await fetchLiveStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
+            allowGlobalFallback: true,
+          });
           if (cancelled) return;
           if (remoteLive && typeof remoteLive === "object") {
             applyIncomingLive(remoteLive, { preferIncoming: true });
