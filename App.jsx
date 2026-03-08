@@ -186,6 +186,7 @@ function defaultDB() {
       updatedBy: null,
     },
     history: [],
+    debts: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -215,6 +216,7 @@ function loadDB() {
         parsed?.settings && typeof parsed.settings === "object" && !Array.isArray(parsed.settings)
           ? parsed.settings
           : {},
+      debts: Array.isArray(parsed?.debts) ? parsed.debts : [],
     };
   } catch {
     return defaultDB();
@@ -266,6 +268,7 @@ function dbToCsvPayload(db) {
     ["presence", JSON.stringify(db.presence || {})],
     ["live", JSON.stringify(db.live || defaultDB().live)],
     ["history", JSON.stringify(db.history || [])],
+    ["debts", JSON.stringify(db.debts || [])],
     ["adminEvents", JSON.stringify(db.adminEvents || [])],
     ["autoBackups", JSON.stringify(db.autoBackups || [])],
   ];
@@ -384,6 +387,7 @@ function csvPayloadToDb(csvText) {
       : [],
     adminEvents: Array.isArray(parts.adminEvents) ? parts.adminEvents : [],
     history: Array.isArray(parts.history) ? parts.history : [],
+    debts: Array.isArray(parts.debts) ? parts.debts : [],
     live: (() => {
       const players =
         Array.isArray(parts?.live?.players) && parts.live.players.length
@@ -639,6 +643,43 @@ function calculateOutstandingBuyIns(live) {
     potHolderId,
     potHolderName: safeName(potHolderRow?.name || "Pot Holder"),
   };
+}
+
+function buildUnpaidBuyInDebtRecords(live, sessionMeta = {}) {
+  const rows = Array.isArray(live?.players) ? live.players : [];
+  const cashPerBuyIn = round2(Math.max(0, Number(live?.buyInCashAmount) || 0));
+  const potHolderId = resolvePotHolderPlayerId(rows, live?.potHolderPlayerId);
+  const potHolder = rows.find((p) => playerRefId(p, p?.id || "") === potHolderId) || null;
+  const sessionId = String(sessionMeta?.sessionId || "");
+  const sessionDate = String(sessionMeta?.sessionDate || new Date().toISOString());
+  const mode = sessionMeta?.mode === "cash" ? "cash" : "tournament";
+
+  return rows
+    .map((p) => {
+      const fromPlayerId = playerRefId(p, p?.id || "");
+      const entries = normalizeBuyInEntries(p?.buyInEntries, p?.buyIns, cashPerBuyIn);
+      const unpaid = round2(
+        entries
+          .filter((e) => !e.paid)
+          .reduce((sum, e) => sum + round2(e.amount), 0)
+      );
+      if (!sessionId || unpaid <= 0.0001 || !fromPlayerId || fromPlayerId === potHolderId || !potHolderId) return null;
+      return {
+        id: `debt:${sessionId}:${fromPlayerId}:${potHolderId}:unpaid_buyin`,
+        fromPlayerId,
+        toPlayerId: potHolderId,
+        fromPlayerName: safeName(p?.name || "Player"),
+        toPlayerName: safeName(potHolder?.name || "Pot Holder"),
+        amount: unpaid,
+        sessionId,
+        sessionDate,
+        mode,
+        type: "unpaid_buyin",
+        settled: false,
+        settledAt: null,
+      };
+    })
+    .filter(Boolean);
 }
 
 function computeSession(live) {
@@ -1226,6 +1267,25 @@ function MainApp() {
     return null;
   }
 
+  async function fetchDebtsStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS, options = {}) {
+    const allowGlobalFallback = !!options.allowGlobalFallback;
+    const debts = await Promise.race([
+      fetchStateByKey(SYNC_STATE_KEYS.DEBTS),
+      new Promise((_, reject) =>
+        window.setTimeout(() => reject(new Error("Network request timed out")), ms)
+      ),
+    ]);
+    if (Array.isArray(debts)) return debts;
+    if (debts != null) return null;
+    if (!allowGlobalFallback) return null;
+
+    const legacy = await fetchDatabaseStateWithTimeout(ms);
+    if (legacy && typeof legacy === "object" && Array.isArray(legacy.debts)) {
+      return legacy.debts;
+    }
+    return null;
+  }
+
   function refreshPendingCloudWriteFlag() {
     const pending = Boolean(
       cloudWriteInFlightRef.current ||
@@ -1438,6 +1498,18 @@ function MainApp() {
       });
     };
 
+    const applyIncomingDebts = (incomingDebts) => {
+      if (!Array.isArray(incomingDebts)) return;
+      setDB((prev) => {
+        const next = {
+          ...prev,
+          debts: incomingDebts,
+        };
+        writeLocalCache(next);
+        return next;
+      });
+    };
+
     const onStorage = (e) => {
       if (e.key === DB_KEY && e.newValue) {
         try {
@@ -1457,6 +1529,7 @@ function MainApp() {
 
     let unsubscribeDb = () => {};
     let unsubscribeHistory = () => {};
+    let unsubscribeDebts = () => {};
     let isRefreshing = false;
     if (hasDatabase()) {
       const refreshRemoteNow = async () => {
@@ -1533,6 +1606,18 @@ function MainApp() {
           applyIncomingHistory(incoming.history);
         }
       );
+      unsubscribeDebts = subscribeStateByKey(
+        SYNC_STATE_KEYS.DEBTS,
+        (incoming) => {
+          if (cancelled) return;
+          if (Array.isArray(incoming)) {
+            applyIncomingDebts(incoming);
+            return;
+          }
+          if (!Array.isArray(incoming?.debts)) return;
+          applyIncomingDebts(incoming.debts);
+        }
+      );
       (async () => {
         try {
           const remoteLive = await fetchLiveStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
@@ -1569,6 +1654,16 @@ function MainApp() {
           if (cancelled) return;
           if (!Array.isArray(remoteHistory)) return;
           applyIncomingHistory(remoteHistory);
+        } catch {}
+      })();
+      (async () => {
+        try {
+          const remoteDebts = await fetchDebtsStateWithTimeout(CLOUD_FETCH_TIMEOUT_MS, {
+            allowGlobalFallback: true,
+          });
+          if (cancelled) return;
+          if (!Array.isArray(remoteDebts)) return;
+          applyIncomingDebts(remoteDebts);
         } catch {}
       })();
 
@@ -1626,6 +1721,7 @@ function MainApp() {
         window.clearInterval(staleId);
         unsubscribeDb();
         unsubscribeHistory();
+        unsubscribeDebts();
         window.removeEventListener("focus", onWake);
         window.removeEventListener("online", onWake);
         document.removeEventListener("visibilitychange", onVisibility);
@@ -1638,6 +1734,7 @@ function MainApp() {
       cancelled = true;
       unsubscribeDb();
       unsubscribeHistory();
+      unsubscribeDebts();
       channel.close();
       window.removeEventListener("storage", onStorage);
     };
@@ -1798,6 +1895,17 @@ function MainApp() {
   const buyInDebtSummary = useMemo(
     () => (db.live?.mode === "cash" ? calculateOutstandingBuyIns(db.live) : { debts: [], collected: 0, total: 0, potHolderId: "", potHolderName: "" }),
     [db.live]
+  );
+  const persistedOutstandingDebts = useMemo(
+    () =>
+      (Array.isArray(db.debts) ? db.debts : [])
+        .filter((d) => d?.type === "unpaid_buyin" && !d?.settled && Number(d?.amount || 0) > 0.0001)
+        .sort(
+          (a, b) =>
+            String(b?.sessionDate || "").localeCompare(String(a?.sessionDate || "")) ||
+            Number(b?.amount || 0) - Number(a?.amount || 0)
+        ),
+    [db.debts]
   );
   const lastClear = useMemo(
     () =>
@@ -2272,9 +2380,23 @@ function MainApp() {
     };
 
     const nextHistory = [snapshot, ...db.history];
+    const newDebts = computed.isCashMode
+      ? buildUnpaidBuyInDebtRecords(db.live, {
+          sessionId: snapshot.id,
+          sessionDate: snapshot.stamp,
+          mode: computed.mode,
+        })
+      : [];
+    const prevDebts = Array.isArray(db.debts) ? db.debts : [];
+    const existingIds = new Set(prevDebts.map((d) => String(d?.id || "")));
+    const mergedDebts = [
+      ...prevDebts,
+      ...newDebts.filter((d) => d?.id && !existingIds.has(String(d.id))),
+    ];
     const autoBackupCsv = dbToCsvPayload({
       ...db,
       history: nextHistory,
+      debts: mergedDebts,
       live: nextLive,
       autoBackups: db.autoBackups || [],
     });
@@ -2283,6 +2405,7 @@ function MainApp() {
       {
         ...db,
         history: nextHistory,
+        debts: mergedDebts,
         live: nextLive,
         autoBackups: [
           {
@@ -2297,7 +2420,10 @@ function MainApp() {
       },
       {
         cloudBucket: SYNC_STATE_KEYS.LIVE,
-        additionalCloudWrites: [{ bucket: SYNC_STATE_KEYS.HISTORY, payload: nextHistory }],
+        additionalCloudWrites: [
+          { bucket: SYNC_STATE_KEYS.HISTORY, payload: nextHistory },
+          { bucket: SYNC_STATE_KEYS.DEBTS, payload: mergedDebts },
+        ],
       }
     );
 
@@ -2326,6 +2452,22 @@ function MainApp() {
     commit(
       { ...db, history: nextHistory },
       { cloudBucket: SYNC_STATE_KEYS.HISTORY, cloudPayload: nextHistory }
+    );
+  }
+
+  function setDebtSettled(debtId, settled) {
+    const nextDebts = (Array.isArray(db.debts) ? db.debts : []).map((d) =>
+      d?.id === debtId
+        ? {
+            ...d,
+            settled: !!settled,
+            settledAt: settled ? new Date().toISOString() : null,
+          }
+        : d
+    );
+    commit(
+      { ...db, debts: nextDebts },
+      { cloudBucket: SYNC_STATE_KEYS.DEBTS, cloudPayload: nextDebts }
     );
   }
 
@@ -2394,10 +2536,14 @@ function MainApp() {
           ...(Array.isArray(db.adminEvents) ? db.adminEvents : []),
         ],
         history: [],
+        debts: [],
       },
       {
         cloudBucket: SYNC_STATE_KEYS.LIVE,
-        additionalCloudWrites: [{ bucket: SYNC_STATE_KEYS.HISTORY, payload: [] }],
+        additionalCloudWrites: [
+          { bucket: SYNC_STATE_KEYS.HISTORY, payload: [] },
+          { bucket: SYNC_STATE_KEYS.DEBTS, payload: [] },
+        ],
       }
     );
     setPlayerDebtOpen({});
@@ -3284,18 +3430,23 @@ for update to anon using (true) with check (true);`}
         {tab === "debts" && (
           <section className="panel">
             <h3>Outstanding Debts</h3>
-            {db.live?.mode !== "cash" ? (
-              <div className="muted">Buy-in debt tracking is available only in Cash Game mode.</div>
-            ) : buyInDebtSummary.debts.length === 0 ? (
+            {persistedOutstandingDebts.length === 0 ? (
               <div className="muted">No unpaid buy-ins.</div>
             ) : (
               <div className="debt-live-list">
-                {buyInDebtSummary.debts.map((d) => (
-                  <div key={`${d.playerId}-${d.potHolderId}`} className="tx-item">
-                    <strong>{d.playerName}</strong>
+                {persistedOutstandingDebts.map((d) => (
+                  <div key={d.id} className="tx-item">
+                    <strong>{safeName(d.fromPlayerName || d.fromPlayerId || "Player")}</strong>
                     <span> owes </span>
-                    <strong>{d.potHolderName}</strong>
+                    <strong>{safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}</strong>
                     <span> {money(d.amount)}</span>
+                    <button
+                      type="button"
+                      className="tiny-btn"
+                      onClick={() => setDebtSettled(d.id, true)}
+                    >
+                      Mark paid
+                    </button>
                   </div>
                 ))}
               </div>
