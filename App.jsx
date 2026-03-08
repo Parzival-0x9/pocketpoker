@@ -25,6 +25,7 @@ const DB_KEY = "classmates_db_v1";
 const ONLINE_WINDOW_MS = 120000;
 const SYNC_STALE_MS = 45000;
 const CLOUD_FETCH_TIMEOUT_MS = 7000;
+const CLOUD_WRITE_DEBOUNCE_MS = 250;
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -1097,6 +1098,9 @@ function MainApp() {
   const lastSyncAtRef = useRef(lastSyncAt);
   const pendingCloudWriteRef = useRef(pendingCloudWrite);
   const remoteLoadedRef = useRef(remoteLoaded);
+  const cloudWriteInFlightRef = useRef(false);
+  const queuedCloudSnapshotRef = useRef(null);
+  const cloudWriteTimerRef = useRef(null);
   const toastSeqRef = useRef(0);
   const LOCAL_CACHE_LIMIT_MSG = "Local cache limit reached. Session saved to cloud.";
 
@@ -1119,6 +1123,16 @@ function MainApp() {
   useEffect(() => {
     remoteLoadedRef.current = remoteLoaded;
   }, [remoteLoaded]);
+
+  useEffect(
+    () => () => {
+      if (cloudWriteTimerRef.current) {
+        window.clearTimeout(cloudWriteTimerRef.current);
+        cloudWriteTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     const onScroll = () => {
@@ -1167,6 +1181,85 @@ function MainApp() {
         window.setTimeout(() => reject(new Error("Network request timed out")), ms)
       ),
     ]);
+  }
+
+  function refreshPendingCloudWriteFlag() {
+    const pending = Boolean(
+      cloudWriteInFlightRef.current ||
+      queuedCloudSnapshotRef.current ||
+      cloudWriteTimerRef.current
+    );
+    pendingCloudWriteRef.current = pending;
+    setPendingCloudWrite(pending);
+  }
+
+  async function flushCloudWriteQueue() {
+    if (!hasDatabase()) {
+      queuedCloudSnapshotRef.current = null;
+      if (cloudWriteTimerRef.current) {
+        window.clearTimeout(cloudWriteTimerRef.current);
+        cloudWriteTimerRef.current = null;
+      }
+      cloudWriteInFlightRef.current = false;
+      refreshPendingCloudWriteFlag();
+      return;
+    }
+    if (cloudWriteInFlightRef.current) return;
+
+    while (queuedCloudSnapshotRef.current) {
+      const snapshot = queuedCloudSnapshotRef.current;
+      queuedCloudSnapshotRef.current = null;
+      cloudWriteInFlightRef.current = true;
+      refreshPendingCloudWriteFlag();
+      try {
+        await pushDatabaseState(snapshot);
+        setSyncState("connected");
+        setSyncError("");
+        setSyncNote("");
+        setLastSyncAt(new Date().toISOString());
+      } catch (err) {
+        setSyncState("error");
+        setSyncError(String(err?.message || err || "Database write failed"));
+        setSyncNote("Using local session only");
+      } finally {
+        cloudWriteInFlightRef.current = false;
+        refreshPendingCloudWriteFlag();
+      }
+    }
+  }
+
+  function enqueueCloudWrite(snapshot, debounceMs = CLOUD_WRITE_DEBOUNCE_MS) {
+    queuedCloudSnapshotRef.current = snapshot;
+    setSyncState("connecting");
+    refreshPendingCloudWriteFlag();
+    if (cloudWriteTimerRef.current) {
+      window.clearTimeout(cloudWriteTimerRef.current);
+      cloudWriteTimerRef.current = null;
+    }
+    if (debounceMs <= 0) {
+      flushCloudWriteQueue();
+      return;
+    }
+    cloudWriteTimerRef.current = window.setTimeout(() => {
+      cloudWriteTimerRef.current = null;
+      refreshPendingCloudWriteFlag();
+      flushCloudWriteQueue();
+    }, debounceMs);
+  }
+
+  async function enqueueCloudWriteAndFlush(snapshot) {
+    enqueueCloudWrite(snapshot, 0);
+    const startedAt = Date.now();
+    while (
+      cloudWriteInFlightRef.current ||
+      queuedCloudSnapshotRef.current ||
+      cloudWriteTimerRef.current
+    ) {
+      if (Date.now() - startedAt > 15000) {
+        throw new Error("Network request timed out");
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 40));
+    }
   }
 
   function formatSyncError(err, fallback = "Cloud sync unavailable") {
@@ -1449,25 +1542,11 @@ function MainApp() {
       if (!remoteLoadedRef.current) {
         setSyncState("error");
         setSyncError("Cloud not safely loaded yet");
-        setPendingCloudWrite(false);
+        refreshPendingCloudWriteFlag();
         setSyncNote("Using local session only");
         return;
       }
-      setPendingCloudWrite(true);
-      pushDatabaseState(stamped)
-        .then(() => {
-          setSyncState("connected");
-          setSyncError("");
-          setPendingCloudWrite(false);
-          setSyncNote("");
-          setLastSyncAt(new Date().toISOString());
-        })
-        .catch((err) => {
-          setSyncState("error");
-          setSyncError(String(err?.message || err || "Database write failed"));
-          setPendingCloudWrite(false);
-          setSyncNote("Using local session only");
-        });
+      enqueueCloudWrite(stamped);
     }
   }
 
@@ -1486,7 +1565,7 @@ function MainApp() {
         setRemoteLoaded(true);
         const freshness = compareStateFreshness(local, remote);
         if (freshness > 0) {
-          await pushDatabaseState(local);
+          await enqueueCloudWriteAndFlush(local);
           message = "Synced local changes to cloud.";
         } else if (freshness < 0) {
           setDB(() => {
