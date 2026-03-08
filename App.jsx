@@ -3,7 +3,9 @@ import {
   fetchDatabaseState,
   hasDatabase,
   pushDatabaseState,
+  pushStateByKey,
   subscribeDatabaseState,
+  SYNC_STATE_KEYS,
 } from "./dbSync";
 import {
   BalanceStatus,
@@ -1099,7 +1101,7 @@ function MainApp() {
   const pendingCloudWriteRef = useRef(pendingCloudWrite);
   const remoteLoadedRef = useRef(remoteLoaded);
   const cloudWriteInFlightRef = useRef(false);
-  const queuedCloudSnapshotRef = useRef(null);
+  const queuedCloudWritesRef = useRef(new Map());
   const cloudWriteTimerRef = useRef(null);
   const toastSeqRef = useRef(0);
   const LOCAL_CACHE_LIMIT_MSG = "Local cache limit reached. Session saved to cloud.";
@@ -1186,7 +1188,7 @@ function MainApp() {
   function refreshPendingCloudWriteFlag() {
     const pending = Boolean(
       cloudWriteInFlightRef.current ||
-      queuedCloudSnapshotRef.current ||
+      queuedCloudWritesRef.current.size > 0 ||
       cloudWriteTimerRef.current
     );
     pendingCloudWriteRef.current = pending;
@@ -1195,7 +1197,7 @@ function MainApp() {
 
   async function flushCloudWriteQueue() {
     if (!hasDatabase()) {
-      queuedCloudSnapshotRef.current = null;
+      queuedCloudWritesRef.current.clear();
       if (cloudWriteTimerRef.current) {
         window.clearTimeout(cloudWriteTimerRef.current);
         cloudWriteTimerRef.current = null;
@@ -1206,13 +1208,17 @@ function MainApp() {
     }
     if (cloudWriteInFlightRef.current) return;
 
-    while (queuedCloudSnapshotRef.current) {
-      const snapshot = queuedCloudSnapshotRef.current;
-      queuedCloudSnapshotRef.current = null;
+    while (queuedCloudWritesRef.current.size > 0) {
+      const [bucket, payload] = queuedCloudWritesRef.current.entries().next().value;
+      queuedCloudWritesRef.current.delete(bucket);
       cloudWriteInFlightRef.current = true;
       refreshPendingCloudWriteFlag();
       try {
-        await pushDatabaseState(snapshot);
+        if (bucket === SYNC_STATE_KEYS.GLOBAL) {
+          await pushDatabaseState(payload);
+        } else {
+          await pushStateByKey(bucket, payload);
+        }
         setSyncState("connected");
         setSyncError("");
         setSyncNote("");
@@ -1228,8 +1234,9 @@ function MainApp() {
     }
   }
 
-  function enqueueCloudWrite(snapshot, debounceMs = CLOUD_WRITE_DEBOUNCE_MS) {
-    queuedCloudSnapshotRef.current = snapshot;
+  function enqueueCloudWrite(writeRequest, debounceMs = CLOUD_WRITE_DEBOUNCE_MS) {
+    const bucket = String(writeRequest?.bucket || SYNC_STATE_KEYS.GLOBAL);
+    queuedCloudWritesRef.current.set(bucket, writeRequest?.payload);
     setSyncState("connecting");
     refreshPendingCloudWriteFlag();
     if (cloudWriteTimerRef.current) {
@@ -1248,11 +1255,11 @@ function MainApp() {
   }
 
   async function enqueueCloudWriteAndFlush(snapshot) {
-    enqueueCloudWrite(snapshot, 0);
+    enqueueCloudWrite({ bucket: SYNC_STATE_KEYS.GLOBAL, payload: snapshot }, 0);
     const startedAt = Date.now();
     while (
       cloudWriteInFlightRef.current ||
-      queuedCloudSnapshotRef.current ||
+      queuedCloudWritesRef.current.size > 0 ||
       cloudWriteTimerRef.current
     ) {
       if (Date.now() - startedAt > 15000) {
@@ -1528,7 +1535,7 @@ function MainApp() {
     };
   }, []);
 
-  function commit(next) {
+  function commit(next, options = {}) {
     const now = new Date().toISOString();
     const prevRev = Number(dbRef.current?.rev || 0);
     const stamped = {
@@ -1546,7 +1553,14 @@ function MainApp() {
         setSyncNote("Using local session only");
         return;
       }
-      enqueueCloudWrite(stamped);
+      const targetBucket = String(options?.cloudBucket || SYNC_STATE_KEYS.GLOBAL);
+      const payload =
+        options?.cloudPayload !== undefined
+          ? options.cloudPayload
+          : targetBucket === SYNC_STATE_KEYS.LIVE
+            ? stamped.live
+            : stamped;
+      enqueueCloudWrite({ bucket: targetBucket, payload });
     }
   }
 
@@ -1648,14 +1662,19 @@ function MainApp() {
       ...nextLiveRaw,
       potHolderPlayerId: resolvePotHolderPlayerId(normalizedPlayers, nextLiveRaw?.potHolderPlayerId),
     };
-    commit({
-      ...db,
-      live: {
-        ...nextLive,
-        updatedBy: currentUser?.name || "Unknown",
-        updatedAt: new Date().toISOString(),
+    commit(
+      {
+        ...db,
+        live: {
+          ...nextLive,
+          updatedBy: currentUser?.name || "Unknown",
+          updatedAt: new Date().toISOString(),
+        },
       },
-    });
+      {
+        cloudBucket: SYNC_STATE_KEYS.LIVE,
+      }
+    );
   }
   const computed = useMemo(() => computeSession(db.live), [db.live]);
   const buyInDebtSummary = useMemo(

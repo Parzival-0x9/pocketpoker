@@ -1,8 +1,15 @@
 import { hasSupabase, supabase, supabaseRuntimeInfo } from "./supabase";
 
 const TABLE = "classmates_state";
-const ROW_ID = "global";
 const isDev = import.meta.env.DEV;
+
+export const SYNC_STATE_KEYS = {
+  LIVE: "live",
+  SETTINGS: "settings",
+  HISTORY: "history",
+  DEBTS: "debts",
+  GLOBAL: "global",
+};
 
 function classifySyncError(err, stage) {
   const msg = String(err?.message || err || "").trim();
@@ -42,17 +49,18 @@ export function hasDatabase() {
   return hasSupabase;
 }
 
-export async function fetchDatabaseState() {
+export async function fetchStateByKey(key) {
   if (!supabase) {
     devLog("read.skip", { reason: "client missing" });
     return null;
   }
-  devLog("read.start", { table: TABLE, id: ROW_ID, host: supabaseRuntimeInfo.sanitizedHost || "(invalid-url)" });
+  const rowId = String(key || SYNC_STATE_KEYS.GLOBAL);
+  devLog("read.start", { table: TABLE, id: rowId, host: supabaseRuntimeInfo.sanitizedHost || "(invalid-url)" });
   try {
     const { data, error } = await supabase
       .from(TABLE)
       .select("payload")
-      .eq("id", ROW_ID)
+      .eq("id", rowId)
       .maybeSingle();
     if (error) throw error;
     devLog("read.success", { hasPayload: Boolean(data?.payload) });
@@ -64,16 +72,17 @@ export async function fetchDatabaseState() {
   }
 }
 
-export async function pushDatabaseState(payload) {
+export async function pushStateByKey(key, payload) {
   if (!supabase) {
     devLog("write.skip", { reason: "client missing" });
     return null;
   }
-  devLog("write.start", { table: TABLE, id: ROW_ID });
+  const rowId = String(key || SYNC_STATE_KEYS.GLOBAL);
+  devLog("write.start", { table: TABLE, id: rowId });
   try {
     const { error } = await supabase.from(TABLE).upsert(
       {
-        id: ROW_ID,
+        id: rowId,
         payload,
         updated_at: new Date().toISOString(),
       },
@@ -89,13 +98,14 @@ export async function pushDatabaseState(payload) {
   }
 }
 
-export function subscribeDatabaseState(onState, onStatus) {
+export function subscribeStateByKey(key, onState, onStatus) {
   if (!supabase) {
     devLog("realtime.skip", { reason: "client missing" });
     return () => {};
   }
+  const rowId = String(key || SYNC_STATE_KEYS.GLOBAL);
 
-  devLog("realtime.start", { table: TABLE, id: ROW_ID });
+  devLog("realtime.start", { table: TABLE, id: rowId });
 
   const channel = supabase
     .channel("classmates-state-sync")
@@ -105,7 +115,7 @@ export function subscribeDatabaseState(onState, onStatus) {
         event: "*",
         schema: "public",
         table: TABLE,
-        filter: `id=eq.${ROW_ID}`,
+        filter: `id=eq.${rowId}`,
       },
       (event) => {
         const payload = event?.new?.payload;
@@ -121,4 +131,16 @@ export function subscribeDatabaseState(onState, onStatus) {
     devLog("realtime.stop", { removed: true });
     supabase.removeChannel(channel);
   };
+}
+
+export async function fetchDatabaseState() {
+  return await fetchStateByKey(SYNC_STATE_KEYS.GLOBAL);
+}
+
+export async function pushDatabaseState(payload) {
+  return await pushStateByKey(SYNC_STATE_KEYS.GLOBAL, payload);
+}
+
+export function subscribeDatabaseState(onState, onStatus) {
+  return subscribeStateByKey(SYNC_STATE_KEYS.GLOBAL, onState, onStatus);
 }
