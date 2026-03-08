@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchStateByKey,
   fetchDatabaseState,
   hasDatabase,
   pushDatabaseState,
   pushStateByKey,
-  subscribeDatabaseState,
+  subscribeStateByKey,
   SYNC_STATE_KEYS,
 } from "./dbSync";
 import {
@@ -1185,6 +1186,23 @@ function MainApp() {
     ]);
   }
 
+  async function fetchLiveStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS) {
+    const live = await Promise.race([
+      fetchStateByKey(SYNC_STATE_KEYS.LIVE),
+      new Promise((_, reject) =>
+        window.setTimeout(() => reject(new Error("Network request timed out")), ms)
+      ),
+    ]);
+    if (live && typeof live === "object") return live;
+    if (live != null) return null;
+
+    const legacy = await fetchDatabaseStateWithTimeout(ms);
+    if (legacy && typeof legacy === "object" && legacy.live && typeof legacy.live === "object") {
+      return legacy.live;
+    }
+    return null;
+  }
+
   function refreshPendingCloudWriteFlag() {
     const pending = Boolean(
       cloudWriteInFlightRef.current ||
@@ -1352,6 +1370,23 @@ function MainApp() {
       });
     };
 
+    const applyIncomingLive = (incomingLive, options = {}) => {
+      if (!incomingLive || typeof incomingLive !== "object") return;
+      const preferIncoming = !!options.preferIncoming;
+      setDB((prev) => {
+        const mergedIncoming = {
+          ...prev,
+          live: {
+            ...(prev?.live || defaultDB().live),
+            ...incomingLive,
+          },
+        };
+        const next = preferIncoming ? mergedIncoming : pickNewestState(prev, mergedIncoming);
+        writeLocalCache(next);
+        return next;
+      });
+    };
+
     const onStorage = (e) => {
       if (e.key === DB_KEY && e.newValue) {
         try {
@@ -1380,10 +1415,10 @@ function MainApp() {
             setSyncState("connecting");
             return;
           }
-          const remote = await fetchDatabaseStateWithTimeout();
+          const remoteLive = await fetchLiveStateWithTimeout();
           if (cancelled) return;
-          if (remote && typeof remote === "object") {
-            applyIncoming(remote);
+          if (remoteLive && typeof remoteLive === "object") {
+            applyIncomingLive(remoteLive);
             setRemoteLoaded(true);
           } else {
             setSyncState("error");
@@ -1410,10 +1445,11 @@ function MainApp() {
 
       setSyncState("connecting");
       setSyncError("");
-      unsubscribeDb = subscribeDatabaseState(
+      unsubscribeDb = subscribeStateByKey(
+        SYNC_STATE_KEYS.LIVE,
         (incoming) => {
           if (cancelled) return;
-          applyIncoming(incoming);
+          applyIncomingLive(incoming);
           setRemoteLoaded(true);
           setSyncState("connected");
           setSyncError("");
@@ -1434,11 +1470,10 @@ function MainApp() {
       );
       (async () => {
         try {
-          const remote = await fetchDatabaseStateWithTimeout();
+          const remoteLive = await fetchLiveStateWithTimeout();
           if (cancelled) return;
-          if (remote && typeof remote === "object") {
-            // Remote state is the source of truth once database sync is enabled.
-            applyIncoming(remote, { preferIncoming: true });
+          if (remoteLive && typeof remoteLive === "object") {
+            applyIncomingLive(remoteLive, { preferIncoming: true });
             setRemoteLoaded(true);
           } else {
             setSyncState("error");
@@ -1466,16 +1501,16 @@ function MainApp() {
       const pollId = window.setInterval(async () => {
         try {
           if (pendingCloudWriteRef.current) return;
-          const remote = await fetchDatabaseStateWithTimeout();
+          const remoteLive = await fetchLiveStateWithTimeout();
           if (cancelled) return;
-          if (!remote || typeof remote !== "object") {
+          if (!remoteLive || typeof remoteLive !== "object") {
             setSyncState("error");
             setSyncError("Cloud sync unavailable. Using local session only.");
             setPendingCloudWrite(false);
             setSyncNote("Using local session only");
             return;
           }
-          applyIncoming(remote);
+          applyIncomingLive(remoteLive);
           setRemoteLoaded(true);
           setSyncState("connected");
           setSyncError("");
