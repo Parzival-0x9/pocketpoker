@@ -24,6 +24,7 @@ import AuthSettingsPage from "./pages/settings";
 const DB_KEY = "classmates_db_v1";
 const ONLINE_WINDOW_MS = 120000;
 const SYNC_STALE_MS = 45000;
+const CLOUD_FETCH_TIMEOUT_MS = 7000;
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -1074,6 +1075,7 @@ function MainApp() {
   const [manualSyncBusy, setManualSyncBusy] = useState(false);
   const [syncNote, setSyncNote] = useState("");
   const [syncBootstrapped, setSyncBootstrapped] = useState(() => !hasDatabase());
+  const [remoteLoaded, setRemoteLoaded] = useState(() => !hasDatabase());
   const [showRlsHelp, setShowRlsHelp] = useState(false);
   const [tab, setTab] = useState("home");
   const [authView, setAuthView] = useState("login");
@@ -1094,6 +1096,7 @@ function MainApp() {
   const syncStateRef = useRef(syncState);
   const lastSyncAtRef = useRef(lastSyncAt);
   const pendingCloudWriteRef = useRef(pendingCloudWrite);
+  const remoteLoadedRef = useRef(remoteLoaded);
   const toastSeqRef = useRef(0);
   const LOCAL_CACHE_LIMIT_MSG = "Local cache limit reached. Session saved to cloud.";
 
@@ -1112,6 +1115,10 @@ function MainApp() {
   useEffect(() => {
     pendingCloudWriteRef.current = pendingCloudWrite;
   }, [pendingCloudWrite]);
+
+  useEffect(() => {
+    remoteLoadedRef.current = remoteLoaded;
+  }, [remoteLoaded]);
 
   useEffect(() => {
     const onScroll = () => {
@@ -1151,6 +1158,15 @@ function MainApp() {
         return next;
       });
     }, 220);
+  }
+
+  async function fetchDatabaseStateWithTimeout(ms = CLOUD_FETCH_TIMEOUT_MS) {
+    return await Promise.race([
+      fetchDatabaseState(),
+      new Promise((_, reject) =>
+        window.setTimeout(() => reject(new Error("Cloud load timeout")), ms)
+      ),
+    ]);
   }
 
   function toLocalCachePayload(state) {
@@ -1258,19 +1274,27 @@ function MainApp() {
             setSyncState("connecting");
             return;
           }
-          const remote = await fetchDatabaseState();
+          const remote = await fetchDatabaseStateWithTimeout();
           if (cancelled) return;
           if (remote && typeof remote === "object") {
             applyIncoming(remote);
+            setRemoteLoaded(true);
+          } else {
+            setSyncState("error");
+            setSyncError("Cloud sync unavailable. Using local session only.");
+            setPendingCloudWrite(false);
+            setSyncNote("Using local session only");
+            return;
           }
           setSyncState("connected");
           setSyncError("");
           setPendingCloudWrite(false);
+          setSyncNote("");
           setLastSyncAt(new Date().toISOString());
         } catch (err) {
           if (cancelled) return;
           setSyncState("error");
-          setSyncError(String(err?.message || err || "Database sync refresh failed"));
+          setSyncError("Cloud sync unavailable. Using local session only.");
           setPendingCloudWrite(false);
           setSyncNote("Using local session only");
         } finally {
@@ -1283,28 +1307,37 @@ function MainApp() {
       unsubscribeDb = subscribeDatabaseState((incoming) => {
         if (cancelled) return;
         applyIncoming(incoming);
+        setRemoteLoaded(true);
         setSyncState("connected");
         setSyncError("");
         setPendingCloudWrite(false);
+        setSyncNote("");
         setLastSyncAt(new Date().toISOString());
       });
       (async () => {
         try {
-          const remote = await fetchDatabaseState();
+          const remote = await fetchDatabaseStateWithTimeout();
           if (cancelled) return;
           if (remote && typeof remote === "object") {
             // Remote state is the source of truth once database sync is enabled.
             applyIncoming(remote, { preferIncoming: true });
+            setRemoteLoaded(true);
           } else {
-            await pushDatabaseState(dbRef.current);
+            setSyncState("error");
+            setSyncError("Cloud sync unavailable. Using local session only.");
+            setPendingCloudWrite(false);
+            setSyncNote("Using local session only");
+            return;
           }
           setSyncState("connected");
           setPendingCloudWrite(false);
+          setSyncError("");
+          setSyncNote("");
           setLastSyncAt(new Date().toISOString());
         } catch (err) {
           if (cancelled) return;
           setSyncState("error");
-          setSyncError(String(err?.message || err || "Database sync failed"));
+          setSyncError("Cloud sync unavailable. Using local session only.");
           setPendingCloudWrite(false);
           setSyncNote("Using local session only");
         } finally {
@@ -1315,17 +1348,26 @@ function MainApp() {
       const pollId = window.setInterval(async () => {
         try {
           if (pendingCloudWriteRef.current) return;
-          const remote = await fetchDatabaseState();
-          if (cancelled || !remote || typeof remote !== "object") return;
+          const remote = await fetchDatabaseStateWithTimeout();
+          if (cancelled) return;
+          if (!remote || typeof remote !== "object") {
+            setSyncState("error");
+            setSyncError("Cloud sync unavailable. Using local session only.");
+            setPendingCloudWrite(false);
+            setSyncNote("Using local session only");
+            return;
+          }
           applyIncoming(remote);
+          setRemoteLoaded(true);
           setSyncState("connected");
           setSyncError("");
           setPendingCloudWrite(false);
+          setSyncNote("");
           setLastSyncAt(new Date().toISOString());
         } catch (err) {
           if (cancelled) return;
           setSyncState("error");
-          setSyncError(String(err?.message || err || "Database poll failed"));
+          setSyncError("Cloud sync unavailable. Using local session only.");
           setPendingCloudWrite(false);
           setSyncNote("Using local session only");
         }
@@ -1386,6 +1428,13 @@ function MainApp() {
     };
     applyLocalState(stamped, true);
     if (hasDatabase()) {
+      if (!remoteLoadedRef.current) {
+        setSyncState("error");
+        setSyncError("Cloud sync unavailable. Using local session only.");
+        setPendingCloudWrite(false);
+        setSyncNote("Using local session only");
+        return;
+      }
       setPendingCloudWrite(true);
       pushDatabaseState(stamped)
         .then(() => {
@@ -1411,11 +1460,12 @@ function MainApp() {
     setSyncError("");
     setSyncNote("");
     try {
-      const remote = await fetchDatabaseState();
+      const remote = await fetchDatabaseStateWithTimeout();
       const local = dbRef.current;
       let message = "Already up to date.";
 
       if (remote && typeof remote === "object") {
+        setRemoteLoaded(true);
         const freshness = compareStateFreshness(local, remote);
         if (freshness > 0) {
           await pushDatabaseState(local);
@@ -1428,8 +1478,7 @@ function MainApp() {
           message = "Pulled latest data from cloud.";
         }
       } else {
-        await pushDatabaseState(local);
-        message = "Cloud state initialized from this device.";
+        throw new Error("Cloud sync unavailable. Using local session only.");
       }
 
       setSyncState("connected");
@@ -1438,7 +1487,7 @@ function MainApp() {
       setSyncNote(message);
     } catch (err) {
       setSyncState("error");
-      setSyncError(String(err?.message || err || "Manual sync failed"));
+      setSyncError("Cloud sync unavailable. Using local session only.");
       setPendingCloudWrite(false);
       setSyncNote("Using local session only");
     } finally {
