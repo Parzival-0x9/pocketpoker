@@ -8,7 +8,6 @@ export function SessionHeader({
   title = "CLASSMATES",
   slogan = "From classmates to cashmates ♠",
   user = "",
-  onLogout,
 }) {
   return (
     <header className="px-1 text-left">
@@ -42,16 +41,7 @@ export function SessionHeader({
           </svg>
         </div>
         <div className="min-w-0 space-y-1">
-          <div className="flex items-start justify-between gap-3">
-            <h1 className="truncate text-3xl font-bold leading-none tracking-[0.18em] text-amber-400">{title}</h1>
-            <button
-              type="button"
-              onClick={onLogout}
-              className="shrink-0 flex items-center gap-1 text-sm font-medium text-red-300 transition-all duration-150 hover:scale-[1.02] hover:text-red-200 active:scale-[0.98]"
-            >
-              ⎋ Logout
-            </button>
-          </div>
+          <h1 className="truncate text-3xl font-bold leading-none tracking-[0.18em] text-amber-400">{title}</h1>
           <p className="truncate text-sm italic font-medium leading-snug text-emerald-300/80">{slogan}</p>
           <p className="truncate text-xs text-white/50">{user}</p>
         </div>
@@ -131,15 +121,6 @@ export function SyncStatusInline({
         {syncNote ? <p className="truncate text-emerald-200/65">{syncNote}</p> : null}
       </div>
       <div className="flex items-center gap-2">
-        {onLogout ? (
-          <button
-            type="button"
-            onClick={onLogout}
-            className="rounded-full px-3 py-1 font-medium text-red-100 ring-1 ring-red-300/25 transition active:scale-95"
-          >
-            Logout
-          </button>
-        ) : null}
         <button
           type="button"
           onClick={onSyncNow}
@@ -151,6 +132,15 @@ export function SyncStatusInline({
         <span className="rounded-full bg-amber-300/15 px-2.5 py-1 font-semibold text-amber-200 ring-1 ring-amber-200/20">
           {role}
         </span>
+        {onLogout ? (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="rounded-full px-3 py-1 font-medium text-emerald-100 ring-1 ring-white/15 transition active:scale-95 hover:bg-white/5"
+          >
+            Logout
+          </button>
+        ) : null}
       </div>
     </section>
   );

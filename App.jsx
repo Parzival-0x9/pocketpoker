@@ -3327,7 +3327,6 @@ function MainApp() {
         <section className="space-y-4">
           <SessionHeader
             user={profile?.nickname || currentUser.name}
-            onLogout={signOut}
           />
         </section>
 
@@ -3372,6 +3371,7 @@ function MainApp() {
             role="Admin"
             syncNote={syncNote}
             onSyncNow={manualSyncNow}
+            onLogout={signOut}
             syncBusy={manualSyncBusy}
             syncDisabled={!hasDatabase()}
           />
