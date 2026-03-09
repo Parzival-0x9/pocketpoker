@@ -1119,6 +1119,7 @@ function computePlayerStats(history) {
           cashNet: 0,
           tournamentNet: 0,
           totalNet: 0,
+          avgPerGame: 0,
           wins: 0,
           biggestWin: 0,
           biggestLoss: 0,
@@ -1139,6 +1140,7 @@ function computePlayerStats(history) {
         if (isWinner) row.wins += 1;
       }
       row.totalNet = round2(row.cashNet + row.tournamentNet);
+      row.avgPerGame = row.sessionsPlayed > 0 ? round2(row.totalNet / row.sessionsPlayed) : 0;
       row.biggestWin = Math.max(row.biggestWin, sessionNet);
       row.biggestLoss = Math.min(row.biggestLoss, sessionNet);
     });
@@ -2330,6 +2332,7 @@ function MainApp() {
       cashNet: round2(Number(s?.cashNet || 0)),
       tournamentNet: round2(Number(s?.tournamentNet || 0)),
       totalNet: round2(Number(s?.totalNet || 0)),
+      avgPerGame: round2(Number(s?.avgPerGame || 0)),
       wins: Number(s?.wins || 0),
       biggestWin: round2(Number(s?.biggestWin || 0)),
       biggestLoss: round2(Number(s?.biggestLoss || 0)),
@@ -3614,6 +3617,7 @@ for update to anon using (true) with check (true);`}
                   onChange={(e) => setPlayerSortBy(e.target.value)}
                 >
                   <option value="totalNet">Total Net</option>
+                  <option value="avgPerGame">Avg/Game</option>
                   <option value="sessionsPlayed">Sessions</option>
                   <option value="biggestWin">Biggest Win</option>
                   <option value="wins">Wins</option>
@@ -3657,12 +3661,13 @@ for update to anon using (true) with check (true);`}
                       <tr>
                         <th>Player</th>
                         <th>Sessions</th>
-                        {playerModeFilter === "all" ? <th>Total Net</th> : null}
-                        {playerModeFilter !== "tournament" ? <th>Cash Net</th> : null}
-                        {playerModeFilter !== "cash" ? <th>Tournament Net</th> : null}
-                        {playerModeFilter !== "cash" ? <th>Wins</th> : null}
+                        <th>Total Net</th>
+                        <th>Avg/Game</th>
+                        <th>Cash Net</th>
+                        <th>Tournament Net</th>
+                        <th>Wins</th>
                         <th>Biggest Win</th>
-                        {playerModeFilter !== "tournament" ? <th>Biggest Loss</th> : null}
+                        <th>Biggest Loss</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3670,20 +3675,13 @@ for update to anon using (true) with check (true);`}
                         <tr key={`lb-${row.name}`}>
                           <td>{row.name}</td>
                           <td>{row.sessionsPlayed}</td>
-                          {playerModeFilter === "all" ? (
-                            <td className={row.totalNet >= 0 ? "pos" : "neg"}>{money(row.totalNet)}</td>
-                          ) : null}
-                          {playerModeFilter !== "tournament" ? (
-                            <td className={row.cashNet >= 0 ? "pos" : "neg"}>{money(row.cashNet)}</td>
-                          ) : null}
-                          {playerModeFilter !== "cash" ? (
-                            <td className={row.tournamentNet >= 0 ? "pos" : "neg"}>{money(row.tournamentNet)}</td>
-                          ) : null}
-                          {playerModeFilter !== "cash" ? <td>{row.wins}</td> : null}
+                          <td className={row.totalNet >= 0 ? "pos" : "neg"}>{money(row.totalNet)}</td>
+                          <td className={row.avgPerGame >= 0 ? "pos" : "neg"}>{money(row.avgPerGame)}</td>
+                          <td className={row.cashNet >= 0 ? "pos" : "neg"}>{money(row.cashNet)}</td>
+                          <td className={row.tournamentNet >= 0 ? "pos" : "neg"}>{money(row.tournamentNet)}</td>
+                          <td>{row.wins}</td>
                           <td className={row.biggestWin >= 0 ? "pos" : "neg"}>{money(row.biggestWin)}</td>
-                          {playerModeFilter !== "tournament" ? (
-                            <td className={row.biggestLoss >= 0 ? "pos" : "neg"}>{money(row.biggestLoss)}</td>
-                          ) : null}
+                          <td className={row.biggestLoss >= 0 ? "pos" : "neg"}>{money(row.biggestLoss)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -3694,21 +3692,14 @@ for update to anon using (true) with check (true);`}
                     <div key={`lb-mobile-${row.name}`} className="rounded-xl border border-white/10 bg-white/5 p-3">
                       <div className="font-semibold text-emerald-50">{row.name}</div>
                       <div className="mt-1 text-xs text-emerald-200/70">
-                        Sessions: {row.sessionsPlayed}{playerModeFilter !== "cash" ? ` · Wins: ${row.wins}` : ""}
+                        Sessions: {row.sessionsPlayed} · Wins: {row.wins}
                       </div>
-                      {playerModeFilter === "all" ? (
-                        <div className={`text-sm ${row.totalNet >= 0 ? "pos" : "neg"}`}>Total Net: {money(row.totalNet)}</div>
-                      ) : null}
-                      {playerModeFilter !== "tournament" ? (
-                        <div className={`text-xs ${row.cashNet >= 0 ? "pos" : "neg"}`}>Cash Net: {money(row.cashNet)}</div>
-                      ) : null}
-                      {playerModeFilter !== "cash" ? (
-                        <div className={`text-xs ${row.tournamentNet >= 0 ? "pos" : "neg"}`}>Tournament Net: {money(row.tournamentNet)}</div>
-                      ) : null}
+                      <div className={`text-sm ${row.totalNet >= 0 ? "pos" : "neg"}`}>Total Net: {money(row.totalNet)}</div>
+                      <div className={`text-xs ${row.avgPerGame >= 0 ? "pos" : "neg"}`}>Avg/Game: {money(row.avgPerGame)}</div>
+                      <div className={`text-xs ${row.cashNet >= 0 ? "pos" : "neg"}`}>Cash Net: {money(row.cashNet)}</div>
+                      <div className={`text-xs ${row.tournamentNet >= 0 ? "pos" : "neg"}`}>Tournament Net: {money(row.tournamentNet)}</div>
                       <div className={`text-xs ${row.biggestWin >= 0 ? "pos" : "neg"}`}>Biggest Win: {money(row.biggestWin)}</div>
-                      {playerModeFilter !== "tournament" ? (
-                        <div className={`text-xs ${row.biggestLoss >= 0 ? "pos" : "neg"}`}>Biggest Loss: {money(row.biggestLoss)}</div>
-                      ) : null}
+                      <div className={`text-xs ${row.biggestLoss >= 0 ? "pos" : "neg"}`}>Biggest Loss: {money(row.biggestLoss)}</div>
                     </div>
                   ))}
                 </div>
