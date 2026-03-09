@@ -696,6 +696,25 @@ function normalizeModeValue(mode) {
   return mode === "cash" ? "cash" : "tournament";
 }
 
+function inferSessionMode(session, fallbackMode = "") {
+  const explicit = session?.mode || session?.settings?.mode;
+  if (explicit === "cash" || explicit === "tournament") return explicit;
+  if (fallbackMode === "cash" || fallbackMode === "tournament") return fallbackMode;
+
+  const settings = session?.settings || {};
+  const players = Array.isArray(session?.players) ? session.players : [];
+  const prizeEnabled = settings?.prizeEnabled === true;
+  const hasTournamentSignals =
+    prizeEnabled ||
+    (prizeEnabled && Number(settings?.prizePerPlayer || 0) > 0) ||
+    Number(settings?.prizePool || 0) > 0 ||
+    (Array.isArray(settings?.winnerNames) && settings.winnerNames.length > 0) ||
+    players.some((p) => Math.abs(Number(p?.prizeAdj || 0)) > 0.0001);
+
+  // Legacy fallback: if no explicit mode and no tournament indicators, treat as cash.
+  return hasTournamentSignals ? "tournament" : "cash";
+}
+
 const LIVE_SETTINGS_KEYS = [
   "mode",
   "buyInCashAmount",
@@ -1049,24 +1068,22 @@ function buildPlayerDebtTrackers(history) {
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.player.localeCompare(b.player));
 }
 
-function computePlayerStats(history) {
+function computePlayerStats(history, modeFilter = "all", modeOverrides = null) {
   const sessions = Array.isArray(history) ? history : [];
   const stats = {};
 
   sessions.forEach((session) => {
     const players = Array.isArray(session?.players) ? session.players : [];
     if (!players.length) return;
+    const sessionId = String(session?.id || "");
+    const overrideMode =
+      modeOverrides && typeof modeOverrides.get === "function"
+        ? modeOverrides.get(sessionId)
+        : "";
+    const sessionMode = inferSessionMode(session, overrideMode);
+    if (modeFilter !== "all" && sessionMode !== modeFilter) return;
     const settings = session?.settings || {};
-    const explicitMode = session?.mode || settings?.mode;
-    const mode = normalizeModeValue(explicitMode);
-    const hasTournamentSignals =
-      mode === "tournament" ||
-      settings?.prizeEnabled === true ||
-      Number(settings?.prizePerPlayer || 0) > 0 ||
-      Number(settings?.prizePool || 0) > 0 ||
-      (Array.isArray(settings?.winnerNames) && settings.winnerNames.length > 0) ||
-      players.some((p) => Math.abs(Number(p?.prizeAdj || 0)) > 0.0001);
-    const isCashMode = !hasTournamentSignals;
+    const isCashMode = sessionMode === "cash";
 
     const winnerIds = new Set(
       (Array.isArray(settings?.winnerPlayerIds) ? settings.winnerPlayerIds : []).map((id) => String(id || ""))
@@ -2258,29 +2275,13 @@ function MainApp() {
     });
     (Array.isArray(db.history) ? db.history : []).forEach((h) => {
       const sid = String(h?.id || "");
-      const explicit = h?.mode || h?.settings?.mode;
-      if (explicit === "cash" || explicit === "tournament") {
-        map.set(sid, explicit);
-        return;
-      }
       const debtModes = (debtsBySession.get(sid) || []).map((d) => d?.mode).filter(Boolean);
-      if (debtModes.some((m) => m === "cash")) {
-        map.set(sid, "cash");
-        return;
-      }
-      if (debtModes.some((m) => m === "tournament")) {
-        map.set(sid, "tournament");
-        return;
-      }
-      const settings = h?.settings || {};
-      const players = Array.isArray(h?.players) ? h.players : [];
-      const hasTournamentSignals =
-        settings?.prizeEnabled === true ||
-        Number(settings?.prizePerPlayer || 0) > 0 ||
-        Number(settings?.prizePool || 0) > 0 ||
-        (Array.isArray(settings?.winnerNames) && settings.winnerNames.length > 0) ||
-        players.some((p) => Math.abs(Number(p?.prizeAdj || 0)) > 0.0001);
-      map.set(sid, hasTournamentSignals ? "tournament" : "cash");
+      const debtDerivedMode = debtModes.some((m) => m === "cash")
+        ? "cash"
+        : debtModes.some((m) => m === "tournament")
+          ? "tournament"
+          : "";
+      map.set(sid, inferSessionMode(h, debtDerivedMode));
     });
     return map;
   }, [db.history, db.debts]);
@@ -2311,19 +2312,9 @@ function MainApp() {
     () => buildPlayerDebtTrackers(db.history),
     [db.history]
   );
-  const filteredHistoryForPlayers = useMemo(() => {
-    const rows = Array.isArray(db.history) ? db.history : [];
-    if (playerModeFilter === "all") return rows;
-    return rows.filter((h) => {
-      const sid = String(h?.id || "");
-      const explicitMode = h?.mode || h?.settings?.mode;
-      const inferredMode = explicitMode || historyModeBySessionId.get(sid) || "tournament";
-      return normalizeModeValue(inferredMode) === playerModeFilter;
-    });
-  }, [db.history, historyModeBySessionId, playerModeFilter]);
   const playerStats = useMemo(
-    () => computePlayerStats(filteredHistoryForPlayers),
-    [filteredHistoryForPlayers]
+    () => computePlayerStats(db.history, playerModeFilter, historyModeBySessionId),
+    [db.history, historyModeBySessionId, playerModeFilter]
   );
   const playerStatsAll = useMemo(
     () => computePlayerStats(db.history),
@@ -2791,7 +2782,9 @@ function MainApp() {
     const snapshot = {
       id: uid(),
       stamp: new Date().toISOString(),
+      mode: computed.mode,
       settings: {
+        mode: computed.mode,
         buyInCashAmount: computed.cashPerBuyIn,
         buyInChipStack: computed.chipsPerBuyIn,
         chipsPerDollar: computed.chipsPerDollar,
