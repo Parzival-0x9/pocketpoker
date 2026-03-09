@@ -1147,6 +1147,31 @@ function computePlayerStats(history) {
   return stats;
 }
 
+function removeDebtsForDeletedSessions(prevHistory, nextHistory, debts) {
+  const prevIds = new Set(
+    (Array.isArray(prevHistory) ? prevHistory : []).map((h) => String(h?.id || "")).filter(Boolean)
+  );
+  const nextIds = new Set(
+    (Array.isArray(nextHistory) ? nextHistory : []).map((h) => String(h?.id || "")).filter(Boolean)
+  );
+  const removedSessionIds = new Set(Array.from(prevIds).filter((id) => !nextIds.has(id)));
+  if (!removedSessionIds.size) return Array.isArray(debts) ? debts : [];
+  return (Array.isArray(debts) ? debts : []).filter(
+    (d) => !removedSessionIds.has(String(d?.sessionId || ""))
+  );
+}
+
+function pruneDebtsToExistingSessions(history, debts) {
+  const sessionIds = new Set(
+    (Array.isArray(history) ? history : []).map((h) => String(h?.id || "")).filter(Boolean)
+  );
+  return (Array.isArray(debts) ? debts : []).filter((d) => {
+    const sessionId = String(d?.sessionId || "");
+    if (!sessionId) return true;
+    return sessionIds.has(sessionId);
+  });
+}
+
 function useAnimatedNumber(target, durationMs = 200) {
   const [display, setDisplay] = useState(target);
   const fromRef = useRef(target);
@@ -3022,9 +3047,14 @@ function MainApp() {
     const nextHistory = (Array.isArray(db.history) ? db.history : []).filter(
       (h) => !selectedSet.has(String(h?.id || ""))
     );
+    const nextDebts = removeDebtsForDeletedSessions(db.history, nextHistory, db.debts);
     commit(
-      { ...db, history: nextHistory },
-      { cloudBucket: SYNC_STATE_KEYS.HISTORY, cloudPayload: nextHistory }
+      { ...db, history: nextHistory, debts: nextDebts },
+      {
+        cloudBucket: SYNC_STATE_KEYS.HISTORY,
+        cloudPayload: nextHistory,
+        additionalCloudWrites: [{ bucket: SYNC_STATE_KEYS.DEBTS, payload: nextDebts }],
+      }
     );
     setSelectedHistoryIds([]);
     setHistoryOpen((prev) => {
@@ -3072,9 +3102,13 @@ function MainApp() {
     reader.onload = () => {
       try {
         const safe = csvPayloadToDb(String(reader.result || ""));
+        const normalized = {
+          ...safe,
+          debts: pruneDebtsToExistingSessions(safe.history, safe.debts),
+        };
         const ok = window.confirm("Restore backup and replace current app data?");
         if (!ok) return;
-        commit(safe);
+        commit(normalized);
         alert("CSV backup restored.");
       } catch (e) {
         alert(`CSV restore failed: ${e?.message || e}`);
