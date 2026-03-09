@@ -2325,6 +2325,10 @@ function MainApp() {
     () => computePlayerStats(filteredHistoryForPlayers),
     [filteredHistoryForPlayers]
   );
+  const playerStatsAll = useMemo(
+    () => computePlayerStats(db.history),
+    [db.history]
+  );
   const playerLeaderboardRows = useMemo(() => {
     const rows = Object.entries(playerStats || {}).map(([name, s]) => ({
       name,
@@ -3169,6 +3173,41 @@ function MainApp() {
     const winners = Array.isArray(latest?.settings?.winnerNames) ? latest.settings.winnerNames : [];
     return winners.length ? winners.join(", ") : "-";
   }, [db.history]);
+  const homeHighlights = useMemo(() => {
+    const rows = Object.entries(playerStatsAll || {}).map(([name, s]) => ({
+      name,
+      totalNet: round2(Number(s?.totalNet || 0)),
+      sessionsPlayed: Number(s?.sessionsPlayed || 0),
+      biggestWin: round2(Number(s?.biggestWin || 0)),
+      avgPerGame: round2(Number(s?.avgPerGame || 0)),
+    }));
+    if (!rows.length) return null;
+
+    const byValueDescThenName = (arr, getValue) =>
+      [...arr].sort((a, b) => {
+        const av = Number(getValue(a) || 0);
+        const bv = Number(getValue(b) || 0);
+        if (Math.abs(av - bv) > 0.0001) return bv - av;
+        return a.name.localeCompare(b.name);
+      });
+
+    const byValueAscThenName = (arr, getValue) =>
+      [...arr].sort((a, b) => {
+        const av = Number(getValue(a) || 0);
+        const bv = Number(getValue(b) || 0);
+        if (Math.abs(av - bv) > 0.0001) return av - bv;
+        return a.name.localeCompare(b.name);
+      });
+
+    const avgEligible = rows.filter((r) => r.sessionsPlayed >= 2);
+    return {
+      biggestWinner: byValueDescThenName(rows, (r) => r.totalNet)[0] || null,
+      biggestLoser: byValueAscThenName(rows, (r) => r.totalNet)[0] || null,
+      mostSessions: byValueDescThenName(rows, (r) => r.sessionsPlayed)[0] || null,
+      biggestSingleWin: byValueDescThenName(rows, (r) => r.biggestWin)[0] || null,
+      bestAvgPerGame: byValueDescThenName(avgEligible, (r) => r.avgPerGame)[0] || null,
+    };
+  }, [playerStatsAll]);
   const syncAgeMs = Date.now() - (Date.parse(lastSyncAt || "") || 0);
   const syncHeartbeatStale = hasDatabase() && syncState === "connected" && syncAgeMs > SYNC_STALE_MS;
   const syncPending = hasDatabase() && (pendingCloudWrite || manualSyncBusy);
@@ -3289,6 +3328,49 @@ function MainApp() {
                   : `Last winner: ${latestWinnerLabel}`
               }
             />
+
+            <SimpleListCard title="Highlights">
+              {!homeHighlights ? (
+                <div className="text-sm text-emerald-200/65">No session data yet.</div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl bg-black/10 px-3 py-2">
+                    <div className="text-xs text-emerald-200/60">Biggest Winner</div>
+                    <div className="font-semibold text-emerald-50">{homeHighlights.biggestWinner?.name || "-"}</div>
+                    <div className={(homeHighlights.biggestWinner?.totalNet || 0) >= 0 ? "pos text-sm" : "neg text-sm"}>
+                      {money(homeHighlights.biggestWinner?.totalNet || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-black/10 px-3 py-2">
+                    <div className="text-xs text-emerald-200/60">Biggest Loser</div>
+                    <div className="font-semibold text-emerald-50">{homeHighlights.biggestLoser?.name || "-"}</div>
+                    <div className={(homeHighlights.biggestLoser?.totalNet || 0) >= 0 ? "pos text-sm" : "neg text-sm"}>
+                      {money(homeHighlights.biggestLoser?.totalNet || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-black/10 px-3 py-2">
+                    <div className="text-xs text-emerald-200/60">Most Sessions</div>
+                    <div className="font-semibold text-emerald-50">{homeHighlights.mostSessions?.name || "-"}</div>
+                    <div className="text-sm text-emerald-200/85">{homeHighlights.mostSessions?.sessionsPlayed || 0} sessions</div>
+                  </div>
+                  <div className="rounded-xl bg-black/10 px-3 py-2">
+                    <div className="text-xs text-emerald-200/60">Biggest Single Win</div>
+                    <div className="font-semibold text-emerald-50">{homeHighlights.biggestSingleWin?.name || "-"}</div>
+                    <div className={(homeHighlights.biggestSingleWin?.biggestWin || 0) >= 0 ? "pos text-sm" : "neg text-sm"}>
+                      {money(homeHighlights.biggestSingleWin?.biggestWin || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl bg-black/10 px-3 py-2 sm:col-span-2">
+                    <div className="text-xs text-emerald-200/60">Best Avg/Game</div>
+                    <div className="font-semibold text-emerald-50">{homeHighlights.bestAvgPerGame?.name || "-"}</div>
+                    <div className={(homeHighlights.bestAvgPerGame?.avgPerGame || 0) >= 0 ? "pos text-sm" : "neg text-sm"}>
+                      {homeHighlights.bestAvgPerGame ? money(homeHighlights.bestAvgPerGame.avgPerGame) : "No eligible player yet"}
+                    </div>
+                    <div className="text-[11px] text-emerald-200/55">Requires at least 2 sessions</div>
+                  </div>
+                </div>
+              )}
+            </SimpleListCard>
 
             <SimpleListCard title="Recent Games">
               {recentGames.length === 0 ? (
