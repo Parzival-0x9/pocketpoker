@@ -2090,6 +2090,17 @@ function MainApp() {
         ),
     [db.debts]
   );
+  const persistedPaidDebts = useMemo(
+    () =>
+      (Array.isArray(db.debts) ? db.debts : [])
+        .filter((d) => !!d?.settled && Number(d?.amount || 0) > 0.0001)
+        .sort(
+          (a, b) =>
+            String(b?.settledAt || b?.sessionDate || "").localeCompare(String(a?.settledAt || a?.sessionDate || "")) ||
+            Number(b?.amount || 0) - Number(a?.amount || 0)
+        ),
+    [db.debts]
+  );
   const debtSummaryBySessionId = useMemo(() => {
     const out = new Map();
     (Array.isArray(db.debts) ? db.debts : []).forEach((d) => {
@@ -3801,6 +3812,9 @@ for update to anon using (true) with check (true);`}
                       <div className="debt-card-meta muted">
                         {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"} • {formatModeLabel(normalizeModeValue(d.mode))} • {formatDebtTypeLabel(d.type)}
                       </div>
+                      <div className="debt-card-meta muted">
+                        Status: Unpaid
+                      </div>
                     </div>
                     <div className="debt-card-actions">
                       <button
@@ -3810,6 +3824,31 @@ for update to anon using (true) with check (true);`}
                       >
                         Mark paid
                       </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <h3 style={{ marginTop: 16 }}>Paid Debts</h3>
+            {persistedPaidDebts.length === 0 ? (
+              <div className="muted">No paid debts yet.</div>
+            ) : (
+              <div className="debt-live-list">
+                {persistedPaidDebts.map((d) => (
+                  <div key={d.id} className="debt-card">
+                    <div className="debt-card-main">
+                      <div className="debt-card-title">
+                        {normalizeModeValue(d.mode) === "cash" && d.type === "unpaid_buyin"
+                          ? `${safeName(d.fromPlayerName || d.fromPlayerId || "Player")} owed ${safeName(d.toPlayerName || d.toPlayerId || "Pot Holder")}`
+                          : `${safeName(d.fromPlayerName || d.fromPlayerId || "Player")} paid ${safeName(d.toPlayerName || d.toPlayerId || "Player")}`}
+                      </div>
+                      <div className="debt-card-amount">{money(d.amount)}</div>
+                      <div className="debt-card-meta muted">
+                        {d.sessionDate ? new Date(d.sessionDate).toLocaleDateString() : "-"} • {formatModeLabel(normalizeModeValue(d.mode))} • {formatDebtTypeLabel(d.type)}
+                      </div>
+                      <div className="debt-card-meta muted">
+                        Status: Paid{d.settledAt ? ` • ${new Date(d.settledAt).toLocaleString()}` : ""}{d.settledBy ? ` • by ${d.settledBy}` : ""}
+                      </div>
                     </div>
                   </div>
                 ))}
