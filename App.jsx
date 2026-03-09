@@ -3032,6 +3032,29 @@ function MainApp() {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
+  function exportFullReportJson() {
+    const payload = {
+      history: Array.isArray(db.history) ? db.history : [],
+      debts: Array.isArray(db.debts) ? db.debts : [],
+      settings: {
+        ...(db?.settings && typeof db.settings === "object" && !Array.isArray(db.settings) ? db.settings : {}),
+        ...extractLiveSettings(db.live || defaultDB().live),
+      },
+      exportedAt: new Date().toISOString(),
+      version: "v1",
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], {
+      type: "application/json;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `poker-report-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  }
+
   function toggleHistorySessionSelection(sessionId, checked) {
     const id = String(sessionId || "");
     if (!id) return;
@@ -3624,6 +3647,12 @@ for update to anon using (true) with check (true);`}
                   onClick={downloadSessionReportCsv}
                 >
                   Download Session Report (.csv)
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={exportFullReportJson}
+                >
+                  Export Report
                 </button>
                 <button
                   className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
