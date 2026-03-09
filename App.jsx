@@ -30,6 +30,7 @@ const SYNC_STALE_MS = 45000;
 const CLOUD_FETCH_TIMEOUT_MS = 7000;
 const CLOUD_WRITE_DEBOUNCE_MS = 250;
 const SYNC_FAILURE_THRESHOLD = 3;
+const APP_VERSION = "v5.1";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
@@ -3327,6 +3328,7 @@ function MainApp() {
         <section className="space-y-4">
           <SessionHeader
             user={profile?.nickname || currentUser.name}
+            version={APP_VERSION}
           />
         </section>
 

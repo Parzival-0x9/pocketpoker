@@ -8,6 +8,7 @@ export function SessionHeader({
   title = "CLASSMATES",
   slogan = "From classmates to cashmates ♠",
   user = "",
+  version = "",
 }) {
   return (
     <header className="px-1 text-left">
@@ -41,7 +42,14 @@ export function SessionHeader({
           </svg>
         </div>
         <div className="min-w-0 space-y-1">
-          <h1 className="truncate text-3xl font-bold leading-none tracking-[0.18em] text-amber-400">{title}</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <h1 className="truncate text-3xl font-bold leading-none tracking-[0.18em] text-amber-400">{title}</h1>
+            {version ? (
+              <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs font-semibold text-emerald-100/85 ring-1 ring-white/15">
+                {version}
+              </span>
+            ) : null}
+          </div>
           <p className="truncate text-sm italic font-medium leading-snug text-emerald-300/80">{slogan}</p>
           <p className="truncate text-xs text-white/50">{user}</p>
         </div>
