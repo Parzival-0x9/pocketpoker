@@ -1307,6 +1307,7 @@ function MainApp() {
   const [tab, setTab] = useState("home");
   const [playerSortBy, setPlayerSortBy] = useState("totalNet");
   const [playerSortDir, setPlayerSortDir] = useState("desc");
+  const [playerModeFilter, setPlayerModeFilter] = useState("all");
   const [authView, setAuthView] = useState("login");
   const [playerDebtOpen, setPlayerDebtOpen] = useState({});
   const [historyOpen, setHistoryOpen] = useState({});
@@ -2308,9 +2309,19 @@ function MainApp() {
     () => buildPlayerDebtTrackers(db.history),
     [db.history]
   );
+  const filteredHistoryForPlayers = useMemo(() => {
+    const rows = Array.isArray(db.history) ? db.history : [];
+    if (playerModeFilter === "all") return rows;
+    return rows.filter((h) => {
+      const sid = String(h?.id || "");
+      const explicitMode = h?.mode || h?.settings?.mode;
+      const inferredMode = explicitMode || historyModeBySessionId.get(sid) || "tournament";
+      return normalizeModeValue(inferredMode) === playerModeFilter;
+    });
+  }, [db.history, historyModeBySessionId, playerModeFilter]);
   const playerStats = useMemo(
-    () => computePlayerStats(db.history),
-    [db.history]
+    () => computePlayerStats(filteredHistoryForPlayers),
+    [filteredHistoryForPlayers]
   );
   const playerLeaderboardRows = useMemo(() => {
     const rows = Object.entries(playerStats || {}).map(([name, s]) => ({
@@ -3616,6 +3627,26 @@ for update to anon using (true) with check (true);`}
                 </button>
               </div>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { key: "all", label: "All" },
+                { key: "cash", label: "Cash" },
+                { key: "tournament", label: "Tournament" },
+              ].map((opt) => (
+                <button
+                  key={`players-filter-${opt.key}`}
+                  type="button"
+                  className={
+                    playerModeFilter === opt.key
+                      ? "rounded-xl bg-emerald-700/70 px-3 py-1.5 text-xs font-semibold text-emerald-50 ring-1 ring-emerald-300/20"
+                      : "rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-emerald-100"
+                  }
+                  onClick={() => setPlayerModeFilter(opt.key)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             {playerLeaderboardRows.length === 0 ? (
               <div className="muted">No session history yet.</div>
             ) : (
@@ -3626,12 +3657,12 @@ for update to anon using (true) with check (true);`}
                       <tr>
                         <th>Player</th>
                         <th>Sessions</th>
-                        <th>Total Net</th>
-                        <th>Cash Net</th>
-                        <th>Tournament Net</th>
-                        <th>Wins</th>
+                        {playerModeFilter === "all" ? <th>Total Net</th> : null}
+                        {playerModeFilter !== "tournament" ? <th>Cash Net</th> : null}
+                        {playerModeFilter !== "cash" ? <th>Tournament Net</th> : null}
+                        {playerModeFilter !== "cash" ? <th>Wins</th> : null}
                         <th>Biggest Win</th>
-                        <th>Biggest Loss</th>
+                        {playerModeFilter !== "tournament" ? <th>Biggest Loss</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -3639,12 +3670,20 @@ for update to anon using (true) with check (true);`}
                         <tr key={`lb-${row.name}`}>
                           <td>{row.name}</td>
                           <td>{row.sessionsPlayed}</td>
-                          <td className={row.totalNet >= 0 ? "pos" : "neg"}>{money(row.totalNet)}</td>
-                          <td className={row.cashNet >= 0 ? "pos" : "neg"}>{money(row.cashNet)}</td>
-                          <td className={row.tournamentNet >= 0 ? "pos" : "neg"}>{money(row.tournamentNet)}</td>
-                          <td>{row.wins}</td>
+                          {playerModeFilter === "all" ? (
+                            <td className={row.totalNet >= 0 ? "pos" : "neg"}>{money(row.totalNet)}</td>
+                          ) : null}
+                          {playerModeFilter !== "tournament" ? (
+                            <td className={row.cashNet >= 0 ? "pos" : "neg"}>{money(row.cashNet)}</td>
+                          ) : null}
+                          {playerModeFilter !== "cash" ? (
+                            <td className={row.tournamentNet >= 0 ? "pos" : "neg"}>{money(row.tournamentNet)}</td>
+                          ) : null}
+                          {playerModeFilter !== "cash" ? <td>{row.wins}</td> : null}
                           <td className={row.biggestWin >= 0 ? "pos" : "neg"}>{money(row.biggestWin)}</td>
-                          <td className={row.biggestLoss >= 0 ? "pos" : "neg"}>{money(row.biggestLoss)}</td>
+                          {playerModeFilter !== "tournament" ? (
+                            <td className={row.biggestLoss >= 0 ? "pos" : "neg"}>{money(row.biggestLoss)}</td>
+                          ) : null}
                         </tr>
                       ))}
                     </tbody>
@@ -3654,12 +3693,22 @@ for update to anon using (true) with check (true);`}
                   {playerLeaderboardRows.map((row) => (
                     <div key={`lb-mobile-${row.name}`} className="rounded-xl border border-white/10 bg-white/5 p-3">
                       <div className="font-semibold text-emerald-50">{row.name}</div>
-                      <div className="mt-1 text-xs text-emerald-200/70">Sessions: {row.sessionsPlayed} · Wins: {row.wins}</div>
-                      <div className={`text-sm ${row.totalNet >= 0 ? "pos" : "neg"}`}>Total Net: {money(row.totalNet)}</div>
-                      <div className={`text-xs ${row.cashNet >= 0 ? "pos" : "neg"}`}>Cash Net: {money(row.cashNet)}</div>
-                      <div className={`text-xs ${row.tournamentNet >= 0 ? "pos" : "neg"}`}>Tournament Net: {money(row.tournamentNet)}</div>
+                      <div className="mt-1 text-xs text-emerald-200/70">
+                        Sessions: {row.sessionsPlayed}{playerModeFilter !== "cash" ? ` · Wins: ${row.wins}` : ""}
+                      </div>
+                      {playerModeFilter === "all" ? (
+                        <div className={`text-sm ${row.totalNet >= 0 ? "pos" : "neg"}`}>Total Net: {money(row.totalNet)}</div>
+                      ) : null}
+                      {playerModeFilter !== "tournament" ? (
+                        <div className={`text-xs ${row.cashNet >= 0 ? "pos" : "neg"}`}>Cash Net: {money(row.cashNet)}</div>
+                      ) : null}
+                      {playerModeFilter !== "cash" ? (
+                        <div className={`text-xs ${row.tournamentNet >= 0 ? "pos" : "neg"}`}>Tournament Net: {money(row.tournamentNet)}</div>
+                      ) : null}
                       <div className={`text-xs ${row.biggestWin >= 0 ? "pos" : "neg"}`}>Biggest Win: {money(row.biggestWin)}</div>
-                      <div className={`text-xs ${row.biggestLoss >= 0 ? "pos" : "neg"}`}>Biggest Loss: {money(row.biggestLoss)}</div>
+                      {playerModeFilter !== "tournament" ? (
+                        <div className={`text-xs ${row.biggestLoss >= 0 ? "pos" : "neg"}`}>Biggest Loss: {money(row.biggestLoss)}</div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
