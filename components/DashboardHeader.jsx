@@ -11,11 +11,11 @@ export function SessionHeader({
 }) {
   return (
     <header className="px-1 text-left">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         <div className="shrink-0 opacity-85">
           <svg
             viewBox="0 0 64 64"
-            className="h-8 w-8"
+            className="h-14 w-14"
             role="img"
             aria-label="Classmates poker logo"
             xmlns="http://www.w3.org/2000/svg"
