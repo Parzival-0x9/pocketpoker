@@ -3304,7 +3304,7 @@ function MainApp() {
     { key: "debts", label: "Debts" },
     { key: "history", label: "History" },
     { key: "players", label: "Players" },
-    { key: "reports", label: "Reports" },
+    { key: "settings", label: "Settings" },
   ];
   const visiblePresenceRows = presenceRows.slice(0, 7);
 
@@ -3486,13 +3486,16 @@ function MainApp() {
           </section>
         )}
 
-        {tab === "reports" && (
-          <section className="mx-auto max-w-2xl space-y-6">
-            <AuthSettingsPage />
+        {tab === "settings" && (
+          <section className="mx-auto max-w-2xl space-y-3">
+            <section className="rounded-xl bg-emerald-900/35 p-3 ring-1 ring-white/10">
+              <div className="mb-2 text-xs uppercase tracking-wide text-emerald-300/60">Account</div>
+              <AuthSettingsPage />
+            </section>
 
-            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
-              <h3 className="text-lg font-semibold text-emerald-50">Session Mapping</h3>
-              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <section className="rounded-xl bg-emerald-900/35 p-3 ring-1 ring-white/10">
+              <div className="mb-2 text-xs uppercase tracking-wide text-emerald-300/60">Game Settings</div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <label className="space-y-2">
                   <span className="text-xs uppercase tracking-wide text-emerald-300/60">1 Buy-in (Cash)</span>
                   <input
@@ -3565,7 +3568,7 @@ function MainApp() {
                   </div>
                 </div>
               </div>
-              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="mt-2 rounded-xl border border-white/10 bg-white/5 p-2.5">
                 <div className="text-xs uppercase tracking-wide text-emerald-300/60">Current mapping</div>
                 <strong className="text-emerald-50">
                   {money(computed.cashPerBuyIn)} = {computed.chipsPerBuyIn.toLocaleString()} chips
@@ -3574,7 +3577,88 @@ function MainApp() {
               </div>
             </section>
 
-            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
+            <section className="rounded-xl bg-emerald-900/35 p-3 ring-1 ring-white/10">
+              <div className="mb-2 text-xs uppercase tracking-wide text-emerald-300/60">Data & Backup</div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  className="rounded-xl bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-4 py-2 text-sm font-bold text-amber-950 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={downloadSessionReportCsv}
+                >
+                  Download Session Report (.csv)
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={exportSessionsSpreadsheetCsv}
+                >
+                  Export Spreadsheet (CSV)
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={exportFullReportJson}
+                >
+                  Export Backup (JSON)
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                  onClick={downloadBackup}
+                >
+                  Download Raw Backup (.csv)
+                </button>
+                <button
+                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] sm:col-span-2"
+                  onClick={() => backupInputRef.current?.click()}
+                >
+                  Import Backup / Restore
+                </button>
+                <input
+                  ref={backupInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => restoreBackupFile(e.target.files?.[0] || null)}
+                />
+              </div>
+              <div className="mt-2 space-y-1 text-xs text-emerald-200/55">
+                <div>Restore replaces current data. Keep a fresh backup before importing.</div>
+                <div>Session report CSV is for Sheets/Excel. Raw backup CSV is for app restore.</div>
+                <div>Auto backup is saved after every End & Save Session (latest 20).</div>
+              </div>
+              {(db.autoBackups || []).length > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {(db.autoBackups || []).slice(0, 5).map((b) => (
+                    <div key={b.id} className="rounded-xl border border-white/10 bg-white/5 p-2.5">
+                      <div className="text-xs text-emerald-200/60">
+                        {new Date(b.at).toLocaleString()} by {b.by}
+                      </div>
+                      <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button
+                          className="rounded-xl bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-3 py-1.5 text-sm font-bold text-amber-950 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                          onClick={() => downloadSessionReportFromBackupCsv(b.csv, "classmates-auto-session-report")}
+                        >
+                          Session Report CSV
+                        </button>
+                        <button
+                          className="rounded-xl border border-white/10 bg-emerald-800/60 px-3 py-1.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+                          onClick={() => downloadBackupCsv(b.csv, "classmates-auto-backup")}
+                        >
+                          Raw Backup CSV
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-emerald-200/50">No auto backups yet.</div>
+              )}
+              {(db.autoBackups || []).length > 5 ? (
+                <div className="mt-1 text-xs text-emerald-200/50">
+                  Showing latest 5 of {(db.autoBackups || []).length} auto backups.
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-xl bg-emerald-900/35 p-3 ring-1 ring-white/10">
+              <div className="mb-2 text-xs uppercase tracking-wide text-emerald-300/60">System</div>
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-lg font-semibold text-emerald-50">Database Status</h3>
                 <span className="text-xs text-emerald-200/60">{hasDatabase() ? "Supabase configured" : "Local mode"}</span>
@@ -3625,12 +3709,9 @@ for update to anon using (true) with check (true);`}
               ) : null}
             </section>
 
-            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
-              <div className="space-y-1">
-                <h3 className="text-lg font-semibold text-emerald-50">Admin Actions</h3>
-                <div className="text-xs text-emerald-200/50">Applies to all users</div>
-              </div>
-              <div className="mt-4 space-y-3">
+            <section className="rounded-xl border border-red-400/20 bg-red-900/15 p-3 ring-1 ring-red-400/20">
+              <div className="mb-2 text-xs uppercase tracking-wide text-red-200/70">Admin / Danger Zone</div>
+              <div className="space-y-2">
                 <div className="text-xs text-emerald-200/50">
                   Removes all saved session history and resets live session to empty defaults.
                 </div>
@@ -3644,7 +3725,7 @@ for update to anon using (true) with check (true);`}
                   Clear Data
                 </button>
               </div>
-              <div className="mt-5 space-y-3">
+              <div className="mt-3 space-y-2">
                 <div className="text-xs uppercase tracking-wide text-emerald-300/60">Merge Players</div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <select
@@ -3681,89 +3762,6 @@ for update to anon using (true) with check (true);`}
                   Merge Players
                 </button>
               </div>
-            </section>
-
-            <section className="rounded-2xl bg-emerald-900/40 p-5 ring-1 ring-white/10 transition-all duration-150 hover:bg-white/10">
-              <div className="space-y-1">
-                <h3 className="text-lg font-semibold text-emerald-50">Backup</h3>
-                <div className="text-xs text-emerald-200/50">Export or restore app data</div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button
-                  className="rounded-xl bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-4 py-2.5 text-sm font-bold text-amber-950 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                  onClick={downloadSessionReportCsv}
-                >
-                  Download Session Report (.csv)
-                </button>
-                <button
-                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                  onClick={exportSessionsSpreadsheetCsv}
-                >
-                  Export Spreadsheet (CSV)
-                </button>
-                <button
-                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                  onClick={exportFullReportJson}
-                >
-                  Export Report
-                </button>
-                <button
-                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                  onClick={downloadBackup}
-                >
-                  Download Raw Backup (.csv)
-                </button>
-                <button
-                  className="rounded-xl border border-white/10 bg-emerald-800/60 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                  onClick={() => backupInputRef.current?.click()}
-                >
-                  Restore CSV Backup
-                </button>
-                <input
-                  ref={backupInputRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  style={{ display: "none" }}
-                  onChange={(e) => restoreBackupFile(e.target.files?.[0] || null)}
-                />
-              </div>
-              <div className="mt-4 space-y-1 text-xs text-emerald-200/50">
-                <div>Restore replaces current data. Keep a fresh CSV backup before restoring another file.</div>
-                <div>Session Report CSV is for Sheets/Excel. Raw Backup CSV is for app restore.</div>
-                <div>Auto backup is saved after every "End & Save Session" (keeps latest 20).</div>
-              </div>
-              {(db.autoBackups || []).length > 0 ? (
-                <div className="mt-4 space-y-3">
-                  {(db.autoBackups || []).slice(0, 5).map((b) => (
-                    <div key={b.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
-                      <div className="text-xs text-emerald-200/60">
-                        {new Date(b.at).toLocaleString()} by {b.by}
-                      </div>
-                      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <button
-                          className="rounded-xl bg-gradient-to-b from-amber-400/80 to-amber-600/80 px-3 py-2 text-sm font-bold text-amber-950 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                          onClick={() => downloadSessionReportFromBackupCsv(b.csv, "classmates-auto-session-report")}
-                        >
-                          Session Report CSV
-                        </button>
-                        <button
-                          className="rounded-xl border border-white/10 bg-emerald-800/60 px-3 py-2 text-sm font-semibold text-emerald-100 transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
-                          onClick={() => downloadBackupCsv(b.csv, "classmates-auto-backup")}
-                        >
-                          Raw Backup CSV
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="mt-4 text-xs text-emerald-200/50">No auto backups yet.</div>
-              )}
-              {(db.autoBackups || []).length > 5 ? (
-                <div className="mt-2 text-xs text-emerald-200/50">
-                  Showing latest 5 of {(db.autoBackups || []).length} auto backups.
-                </div>
-              ) : null}
             </section>
           </section>
         )}
