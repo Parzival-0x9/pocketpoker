@@ -1305,6 +1305,8 @@ function MainApp() {
   const [remoteLoaded, setRemoteLoaded] = useState(() => !hasDatabase());
   const [showRlsHelp, setShowRlsHelp] = useState(false);
   const [tab, setTab] = useState("home");
+  const [playerSortBy, setPlayerSortBy] = useState("totalNet");
+  const [playerSortDir, setPlayerSortDir] = useState("desc");
   const [authView, setAuthView] = useState("login");
   const [playerDebtOpen, setPlayerDebtOpen] = useState({});
   const [historyOpen, setHistoryOpen] = useState({});
@@ -2310,6 +2312,25 @@ function MainApp() {
     () => computePlayerStats(db.history),
     [db.history]
   );
+  const playerLeaderboardRows = useMemo(() => {
+    const rows = Object.entries(playerStats || {}).map(([name, s]) => ({
+      name,
+      sessionsPlayed: Number(s?.sessionsPlayed || 0),
+      cashNet: round2(Number(s?.cashNet || 0)),
+      tournamentNet: round2(Number(s?.tournamentNet || 0)),
+      totalNet: round2(Number(s?.totalNet || 0)),
+      wins: Number(s?.wins || 0),
+      biggestWin: round2(Number(s?.biggestWin || 0)),
+      biggestLoss: round2(Number(s?.biggestLoss || 0)),
+    }));
+    const factor = playerSortDir === "asc" ? 1 : -1;
+    return rows.sort((a, b) => {
+      const av = Number(a?.[playerSortBy] || 0);
+      const bv = Number(b?.[playerSortBy] || 0);
+      if (Math.abs(av - bv) > 0.0001) return factor * (av - bv);
+      return a.name.localeCompare(b.name);
+    });
+  }, [playerSortBy, playerSortDir, playerStats]);
   const knownPlayerOptions = useMemo(() => {
     const map = new Map();
     const push = (id, name, linked = false, email = "") => {
@@ -3159,7 +3180,8 @@ function MainApp() {
     { key: "live", label: "Live Session" },
     { key: "debts", label: "Debts" },
     { key: "history", label: "History" },
-    { key: "settings", label: "Settings" },
+    { key: "players", label: "Players" },
+    { key: "reports", label: "Reports" },
   ];
   const visiblePresenceRows = presenceRows.slice(0, 7);
 
@@ -3298,7 +3320,7 @@ function MainApp() {
           </section>
         )}
 
-        {tab === "settings" && (
+        {tab === "reports" && (
           <section className="mx-auto max-w-2xl space-y-6">
             <AuthSettingsPage />
 
@@ -3565,6 +3587,84 @@ for update to anon using (true) with check (true);`}
                 </div>
               ) : null}
             </section>
+          </section>
+        )}
+
+        {tab === "players" && (
+          <section className="panel space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3>Players Leaderboard</h3>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-emerald-200/70" htmlFor="players-sort-by">Sort by</label>
+                <select
+                  id="players-sort-by"
+                  className="h-9 rounded-xl border border-white/10 bg-white/5 px-2 text-sm text-emerald-50"
+                  value={playerSortBy}
+                  onChange={(e) => setPlayerSortBy(e.target.value)}
+                >
+                  <option value="totalNet">Total Net</option>
+                  <option value="sessionsPlayed">Sessions</option>
+                  <option value="biggestWin">Biggest Win</option>
+                  <option value="wins">Wins</option>
+                </select>
+                <button
+                  type="button"
+                  className="rounded-xl border border-white/10 bg-white/5 px-2.5 py-1.5 text-xs font-semibold text-emerald-100"
+                  onClick={() => setPlayerSortDir((d) => (d === "desc" ? "asc" : "desc"))}
+                >
+                  {playerSortDir === "desc" ? "Desc" : "Asc"}
+                </button>
+              </div>
+            </div>
+            {playerLeaderboardRows.length === 0 ? (
+              <div className="muted">No session history yet.</div>
+            ) : (
+              <>
+                <div className="history-table-wrap hidden sm:block">
+                  <table className="history-subtable">
+                    <thead>
+                      <tr>
+                        <th>Player</th>
+                        <th>Sessions</th>
+                        <th>Total Net</th>
+                        <th>Cash Net</th>
+                        <th>Tournament Net</th>
+                        <th>Wins</th>
+                        <th>Biggest Win</th>
+                        <th>Biggest Loss</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {playerLeaderboardRows.map((row) => (
+                        <tr key={`lb-${row.name}`}>
+                          <td>{row.name}</td>
+                          <td>{row.sessionsPlayed}</td>
+                          <td className={row.totalNet >= 0 ? "pos" : "neg"}>{money(row.totalNet)}</td>
+                          <td className={row.cashNet >= 0 ? "pos" : "neg"}>{money(row.cashNet)}</td>
+                          <td className={row.tournamentNet >= 0 ? "pos" : "neg"}>{money(row.tournamentNet)}</td>
+                          <td>{row.wins}</td>
+                          <td className={row.biggestWin >= 0 ? "pos" : "neg"}>{money(row.biggestWin)}</td>
+                          <td className={row.biggestLoss >= 0 ? "pos" : "neg"}>{money(row.biggestLoss)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="space-y-2 sm:hidden">
+                  {playerLeaderboardRows.map((row) => (
+                    <div key={`lb-mobile-${row.name}`} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                      <div className="font-semibold text-emerald-50">{row.name}</div>
+                      <div className="mt-1 text-xs text-emerald-200/70">Sessions: {row.sessionsPlayed} · Wins: {row.wins}</div>
+                      <div className={`text-sm ${row.totalNet >= 0 ? "pos" : "neg"}`}>Total Net: {money(row.totalNet)}</div>
+                      <div className={`text-xs ${row.cashNet >= 0 ? "pos" : "neg"}`}>Cash Net: {money(row.cashNet)}</div>
+                      <div className={`text-xs ${row.tournamentNet >= 0 ? "pos" : "neg"}`}>Tournament Net: {money(row.tournamentNet)}</div>
+                      <div className={`text-xs ${row.biggestWin >= 0 ? "pos" : "neg"}`}>Biggest Win: {money(row.biggestWin)}</div>
+                      <div className={`text-xs ${row.biggestLoss >= 0 ? "pos" : "neg"}`}>Biggest Loss: {money(row.biggestLoss)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </section>
         )}
 
