@@ -1049,6 +1049,104 @@ function buildPlayerDebtTrackers(history) {
     .sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || a.player.localeCompare(b.player));
 }
 
+function computePlayerStats(history) {
+  const sessions = Array.isArray(history) ? history : [];
+  const stats = {};
+
+  sessions.forEach((session) => {
+    const players = Array.isArray(session?.players) ? session.players : [];
+    if (!players.length) return;
+    const settings = session?.settings || {};
+    const explicitMode = session?.mode || settings?.mode;
+    const mode = normalizeModeValue(explicitMode);
+    const hasTournamentSignals =
+      mode === "tournament" ||
+      settings?.prizeEnabled === true ||
+      Number(settings?.prizePerPlayer || 0) > 0 ||
+      Number(settings?.prizePool || 0) > 0 ||
+      (Array.isArray(settings?.winnerNames) && settings.winnerNames.length > 0) ||
+      players.some((p) => Math.abs(Number(p?.prizeAdj || 0)) > 0.0001);
+    const isCashMode = !hasTournamentSignals;
+
+    const winnerIds = new Set(
+      (Array.isArray(settings?.winnerPlayerIds) ? settings.winnerPlayerIds : []).map((id) => String(id || ""))
+    );
+    const winnerNames = new Set(
+      (Array.isArray(settings?.winnerNames) ? settings.winnerNames : [])
+        .map((name) => safeName(name).toLowerCase())
+        .filter(Boolean)
+    );
+
+    let derivedWinnerNames = new Set();
+    if (!winnerIds.size && !winnerNames.size && !isCashMode) {
+      let topNet = Number.NEGATIVE_INFINITY;
+      players.forEach((p) => {
+        const baseNet =
+          typeof p?.baseNetCash === "number"
+            ? p.baseNetCash
+            : round2((Number(p?.netCash || 0)) - Number(p?.prizeAdj || 0));
+        const sessionNet = typeof p?.netCash === "number" ? Number(p.netCash) : round2(baseNet + Number(p?.prizeAdj || 0));
+        if (sessionNet > topNet) topNet = sessionNet;
+      });
+      derivedWinnerNames = new Set(
+        players
+          .filter((p) => {
+            const baseNet =
+              typeof p?.baseNetCash === "number"
+                ? p.baseNetCash
+                : round2((Number(p?.netCash || 0)) - Number(p?.prizeAdj || 0));
+            const sessionNet = typeof p?.netCash === "number" ? Number(p.netCash) : round2(baseNet + Number(p?.prizeAdj || 0));
+            return Math.abs(sessionNet - topNet) < 0.0001;
+          })
+          .map((p) => safeName(p?.name).toLowerCase())
+      );
+    }
+
+    players.forEach((p) => {
+      const playerName = safeName(p?.name || "Player");
+      const playerId = String(playerRefId(p, p?.id || "") || "");
+      const baseNet =
+        typeof p?.baseNetCash === "number"
+          ? Number(p.baseNetCash)
+          : round2((Number(p?.netCash || 0)) - Number(p?.prizeAdj || 0));
+      const tournamentNet =
+        typeof p?.netCash === "number" ? Number(p.netCash) : round2(baseNet + Number(p?.prizeAdj || 0));
+      const sessionNet = isCashMode ? baseNet : tournamentNet;
+
+      if (!stats[playerName]) {
+        stats[playerName] = {
+          sessionsPlayed: 0,
+          cashNet: 0,
+          tournamentNet: 0,
+          totalNet: 0,
+          wins: 0,
+          biggestWin: 0,
+          biggestLoss: 0,
+        };
+      }
+
+      const row = stats[playerName];
+      row.sessionsPlayed += 1;
+      if (isCashMode) {
+        row.cashNet = round2(row.cashNet + sessionNet);
+      } else {
+        row.tournamentNet = round2(row.tournamentNet + sessionNet);
+        const playerNameKey = playerName.toLowerCase();
+        const isWinner =
+          (playerId && winnerIds.has(playerId)) ||
+          winnerNames.has(playerNameKey) ||
+          derivedWinnerNames.has(playerNameKey);
+        if (isWinner) row.wins += 1;
+      }
+      row.totalNet = round2(row.cashNet + row.tournamentNet);
+      row.biggestWin = Math.max(row.biggestWin, sessionNet);
+      row.biggestLoss = Math.min(row.biggestLoss, sessionNet);
+    });
+  });
+
+  return stats;
+}
+
 function useAnimatedNumber(target, durationMs = 200) {
   const [display, setDisplay] = useState(target);
   const fromRef = useRef(target);
@@ -2181,6 +2279,10 @@ function MainApp() {
   );
   const playerDebtTrackers = useMemo(
     () => buildPlayerDebtTrackers(db.history),
+    [db.history]
+  );
+  const playerStats = useMemo(
+    () => computePlayerStats(db.history),
     [db.history]
   );
   const knownPlayerOptions = useMemo(() => {
